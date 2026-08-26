@@ -1,0 +1,82 @@
+version: "3.8"
+
+# Stack da automação de reporting (WhatsApp + email), 100% self-hosted, sem
+# nenhuma assinatura nova. Roda dentro do WSL2 via Docker Engine (nao Docker
+# Desktop, que tem termos de licenca comercial para empresas). O Postgres de
+# producao do Pafil fica de fora desta stack por decisao explicita: o n8n
+# alcanca ele pela rede (host.docker.internal), sem containeriza-lo.
+
+services:
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: pafil-n8n
+    restart: unless-stopped
+    ports:
+      - "5678:5678"
+    environment:
+      - N8N_BASIC_AUTH_ACTIVE=true
+      - N8N_BASIC_AUTH_USER=${N8N_BASIC_AUTH_USER}
+      - N8N_BASIC_AUTH_PASSWORD=${N8N_BASIC_AUTH_PASSWORD}
+      - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
+      - GENERIC_TIMEZONE=America/Sao_Paulo
+      - TZ=America/Sao_Paulo
+    volumes:
+      - n8n_data:/home/node/.n8n
+    extra_hosts:
+      # Permite o container alcancar servicos rodando direto no Windows
+      # (o Postgres de producao, na porta 5432) sem Docker Desktop.
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      - capture-service
+      - evolution-api
+
+  capture-service:
+    build: ./capture_service
+    container_name: pafil-capture
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - CAPTURE_API_KEY=${CAPTURE_API_KEY}
+    volumes:
+      # Gerado uma vez por login_once.py (rodado localmente, fora do Docker).
+      # Ver README.md desta pasta.
+      - ./capture_service/storage_state.json:/app/storage_state.json:ro
+
+  evolution-db:
+    image: postgres:16-alpine
+    container_name: pafil-evolution-db
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=evolution
+      - POSTGRES_PASSWORD=${EVOLUTION_DB_PASSWORD}
+      - POSTGRES_DB=evolution
+    volumes:
+      - evolution_db_data:/var/lib/postgresql/data
+    # Banco isolado so para o estado interno do Evolution API (sessoes,
+    # instancias). NAO e o Postgres de producao do Pafil -- essa separacao
+    # e proposital, ver comentario no topo do arquivo.
+
+  evolution-api:
+    # Confira a imagem/tag atual na documentacao oficial do Evolution API
+    # antes de subir em producao -- e um projeto que evolui rapido e o nome
+    # da imagem/variaveis de ambiente abaixo podem ter mudado.
+    image: atendai/evolution-api:latest
+    container_name: pafil-evolution
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      - AUTHENTICATION_API_KEY=${EVOLUTION_API_KEY}
+      - DATABASE_ENABLED=true
+      - DATABASE_PROVIDER=postgresql
+      - DATABASE_CONNECTION_URI=postgresql://evolution:${EVOLUTION_DB_PASSWORD}@evolution-db:5432/evolution
+    volumes:
+      - evolution_instances:/evolution/instances
+    depends_on:
+      - evolution-db
+
+volumes:
+  n8n_data:
+  evolution_db_data:
+  evolution_instances:

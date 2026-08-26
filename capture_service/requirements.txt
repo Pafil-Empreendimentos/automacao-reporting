@@ -1,0 +1,7 @@
+# Mantenha a versao do playwright igual a da imagem base do Dockerfile
+# (mcr.microsoft.com/playwright/python:vX.Y.Z-jammy -> playwright==X.Y.Z).
+# Versoes diferentes entre o pacote Python e os navegadores ja instalados na
+# imagem causam erro na hora de abrir o browser.
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+playwright==1.47.0
