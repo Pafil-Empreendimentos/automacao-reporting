@@ -15,8 +15,12 @@ app = FastAPI()
 class CaptureRequest(BaseModel):
     url: str
     wait_ms: int = 10000
-    width: int = 1920
-    height: int = 1080
+    # Mais largo que 1920 de proposito: o painel de navegacao lateral do Power
+    # BI Service (paginas + rail de icones) consome uns 350px fixos, entao um
+    # relatorio desenhado para 1920 de largura fica cortado a direita se a
+    # viewport for exatamente 1920.
+    width: int = 2400
+    height: int = 1350
 
 
 @app.post("/capture")
