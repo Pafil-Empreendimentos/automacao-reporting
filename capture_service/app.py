@@ -14,7 +14,7 @@ app = FastAPI()
 
 class CaptureRequest(BaseModel):
     url: str
-    wait_ms: int = 6000
+    wait_ms: int = 10000
     width: int = 1920
     height: int = 1080
 
@@ -36,10 +36,12 @@ def capture(req: CaptureRequest, x_api_key: str = Header(default="")):
             viewport={"width": req.width, "height": req.height},
         )
         page = context.new_page()
-        page.goto(req.url, wait_until="networkidle")
-        # Dashboards do Power BI Service seguem renderizando visuais depois do
-        # "networkidle" (chamadas assincronas do motor de DAX). O wait_ms cobre
-        # essa folga -- ajuste pelo tempo real do dashboard mais pesado.
+        # "networkidle" nao serve aqui: o Power BI Service mantem conexoes de
+        # fundo (websocket, telemetria) o tempo todo, entao a pagina nunca fica
+        # ociosa e o goto sempre estoura por timeout. "load" espera so o
+        # carregamento inicial: o wait_ms abaixo cobre o resto da renderizacao
+        # dos visuais, que continua acontecendo depois via chamadas de DAX.
+        page.goto(req.url, wait_until="load", timeout=60000)
         page.wait_for_timeout(req.wait_ms)
         png_bytes = page.screenshot(full_page=False)
         browser.close()
