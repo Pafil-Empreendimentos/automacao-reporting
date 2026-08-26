@@ -77,18 +77,24 @@ services:
       - evolution-db
 
   evolution-manager:
-    # Interface web oficial so para o pareamento inicial via QR code -- a API
-    # de QR (/instance/connect) e reportada como instavel em algumas versoes.
-    # Nao faz parte do fluxo automatizado depois de parear, so uso pontual.
+    # NAO USAR -- mantido so para referencia/reavaliacao futura.
     #
-    # Pinado em v2.0.0 de proposito: a tag "latest" (2.3.5, confirmado em
-    # 26/ago/2026) tem um bug conhecido no nginx do container que trava em
-    # loop de restart ("invalid value must-revalidate" -- issue #2093 do
-    # repo oficial). v2.0.0 e mais antiga mas funciona; reavalie "latest" se
-    # o bug for corrigido rio acima.
+    # Ideia original: interface web oficial pra facilitar o pareamento via QR
+    # code, evitando a instabilidade relatada no endpoint /instance/connect
+    # da API. Na pratica, tanto "latest" (2.3.5) quanto "v2.0.0" (confirmado
+    # em 26/ago/2026) travam em loop de restart com o mesmo erro de nginx
+    # ("invalid value must-revalidate" -- issue #2093 do repo oficial), entao
+    # o bug parece estar no script de inicializacao, nao numa versao especifica.
+    #
+    # O pareamento real acabou funcionando direto pela API (sem esse serviço):
+    # POST /instance/create (com "qrcode": true) devolve o QR em
+    # qrcode.base64; GET /instance/connect/{instanceName} gera um novo se o
+    # primeiro expirar (o QR expira rapido, escaneie assim que gerar). Ver
+    # README.md secao 4.
     image: evoapicloud/evolution-manager:v2.0.0
     container_name: pafil-evolution-manager
-    restart: unless-stopped
+    restart: "no"
+    profiles: ["manager-desativado"]
     ports:
       - "3000:80"
     depends_on:

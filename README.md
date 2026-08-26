@@ -115,25 +115,64 @@ curl -X POST http://localhost:8000/capture \
 
 ## 4. Emparelhando o WhatsApp (Evolution API)
 
-O endpoint de QR code da API (`/instance/connect`) é reportado como instável
-em algumas versões do Evolution API (às vezes não devolve o QR mesmo com a
-instância criada). Por isso o `docker-compose.yml` inclui o **Evolution
-Manager**, a interface web oficial só para esse pareamento inicial:
+O `docker-compose.yml` tem um serviço `evolution-manager` (interface web
+oficial pra facilitar esse pareamento), mas ele não sobe: tanto a tag
+`latest` quanto `v2.0.0` travam em loop de restart por um bug no container
+(ver comentário no `docker-compose.yml`). Não perca tempo com ele -- o
+pareamento funciona direto pela API, testado e funcionando em 26/ago/2026:
 
-1. Abra `http://localhost:3000` (ou pelo IP da máquina, se acessando de fora
-   dela).
-2. Na primeira tela, informe a URL da API (`http://localhost:8080`, ou
-   `http://evolution-api:8080` se o Manager pedir o nome interno do serviço)
-   e a `EVOLUTION_API_KEY` do `.env`.
-3. Crie uma instância nova pela interface.
-4. Abra o QR code exibido e escaneie com o WhatsApp do número que vai enviar
-   os reportings (Configurações → Aparelhos conectados).
+1. Crie a instância (troque `SUA_CHAVE` pela `EVOLUTION_API_KEY` do `.env`):
+   ```bash
+   curl -X POST http://localhost:8080/instance/create \
+     -H "apikey: SUA_CHAVE" \
+     -H "Content-Type: application/json" \
+     -d '{"instanceName": "pafil-reporting", "qrcode": true, "integration": "WHATSAPP-BAILEYS"}'
+   ```
+   A resposta já vem com o QR code em `qrcode.base64` (uma data URI
+   `data:image/png;base64,...`).
+2. Se preferir gerar de novo (o QR expira rápido, uns 20-60s), busque um novo
+   com `GET /instance/connect/{instanceName}`:
+   ```bash
+   curl -s http://localhost:8080/instance/connect/pafil-reporting \
+     -H "apikey: SUA_CHAVE" -o qr_response.json
+   ```
+3. Extraia e salve como imagem (o campo pode vir aninhado diferente entre
+   `create` e `connect`, por isso a busca recursiva):
+   ```bash
+   python3 -c "
+   import json, base64
 
-Depois de parear, o Manager não faz mais parte do fluxo — mandar mensagem é
-uma chamada HTTP simples direto na API (porta 8080), que o n8n faz por um
-node "HTTP Request" apontando para o endpoint de envio da instância. Confira
-a documentação oficial do Evolution API para o endpoint exato, já que nomes
-podem mudar entre versões.
+   def find_base64(obj):
+       if isinstance(obj, dict):
+           if 'base64' in obj and isinstance(obj['base64'], str):
+               return obj['base64']
+           for v in obj.values():
+               r = find_base64(v)
+               if r:
+                   return r
+       return None
+
+   data = json.load(open('qr_response.json'))
+   b64 = find_base64(data)
+   b64 = b64.split(',', 1)[1] if ',' in b64 else b64
+   open('qrcode.png', 'wb').write(base64.b64decode(b64))
+   "
+   ```
+4. Abra `qrcode.png` e escaneie **imediatamente** com o WhatsApp do número
+   que vai enviar os reportings (Configurações → Aparelhos conectados →
+   Conectar um aparelho). Demorar pra escanear é a causa mais comum de
+   "Não foi possível conectar o dispositivo".
+5. Confirme que conectou:
+   ```bash
+   curl -s http://localhost:8080/instance/connectionState/pafil-reporting \
+     -H "apikey: SUA_CHAVE"
+   ```
+   Deve retornar `"state":"open"`.
+
+A partir daí, mandar mensagem é uma chamada HTTP simples direto na API
+(porta 8080), que o n8n faz por um node "HTTP Request" apontando para o
+endpoint de envio da instância. Confira a documentação oficial do Evolution
+API para o endpoint exato, já que nomes podem mudar entre versões.
 
 ## 5. Configurando o envio de email (Outlook, sem SMTP)
 
