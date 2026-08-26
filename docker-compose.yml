@@ -80,7 +80,13 @@ services:
     # Interface web oficial so para o pareamento inicial via QR code -- a API
     # de QR (/instance/connect) e reportada como instavel em algumas versoes.
     # Nao faz parte do fluxo automatizado depois de parear, so uso pontual.
-    image: evoapicloud/evolution-manager:latest
+    #
+    # Pinado em v2.0.0 de proposito: a tag "latest" (2.3.5, confirmado em
+    # 26/ago/2026) tem um bug conhecido no nginx do container que trava em
+    # loop de restart ("invalid value must-revalidate" -- issue #2093 do
+    # repo oficial). v2.0.0 e mais antiga mas funciona; reavalie "latest" se
+    # o bug for corrigido rio acima.
+    image: evoapicloud/evolution-manager:v2.0.0
     container_name: pafil-evolution-manager
     restart: unless-stopped
     ports:
