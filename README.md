@@ -115,16 +115,25 @@ curl -X POST http://localhost:8000/capture \
 
 ## 4. Emparelhando o WhatsApp (Evolution API)
 
-Confira sempre a documentação oficial do Evolution API antes deste passo,
-já que os nomes exatos de endpoint/variáveis podem ter mudado desde que este
-`docker-compose.yml` foi escrito. Em linhas gerais:
+O endpoint de QR code da API (`/instance/connect`) é reportado como instável
+em algumas versões do Evolution API (às vezes não devolve o QR mesmo com a
+instância criada). Por isso o `docker-compose.yml` inclui o **Evolution
+Manager**, a interface web oficial só para esse pareamento inicial:
 
-1. Crie uma instância pela API (autenticada com `EVOLUTION_API_KEY`).
-2. Peça o QR code da instância criada.
-3. Escaneie com o WhatsApp do número que vai enviar os reportings (Configurações → Aparelhos conectados).
+1. Abra `http://localhost:3000` (ou pelo IP da máquina, se acessando de fora
+   dela).
+2. Na primeira tela, informe a URL da API (`http://localhost:8080`, ou
+   `http://evolution-api:8080` se o Manager pedir o nome interno do serviço)
+   e a `EVOLUTION_API_KEY` do `.env`.
+3. Crie uma instância nova pela interface.
+4. Abra o QR code exibido e escaneie com o WhatsApp do número que vai enviar
+   os reportings (Configurações → Aparelhos conectados).
 
-A partir daí, mandar mensagem é uma chamada HTTP simples, que o n8n faz por
-um node "HTTP Request" apontando para o endpoint de envio da instância.
+Depois de parear, o Manager não faz mais parte do fluxo — mandar mensagem é
+uma chamada HTTP simples direto na API (porta 8080), que o n8n faz por um
+node "HTTP Request" apontando para o endpoint de envio da instância. Confira
+a documentação oficial do Evolution API para o endpoint exato, já que nomes
+podem mudar entre versões.
 
 ## 5. Configurando o envio de email (Outlook, sem SMTP)
 

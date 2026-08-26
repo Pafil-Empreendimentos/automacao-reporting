@@ -76,6 +76,18 @@ services:
     depends_on:
       - evolution-db
 
+  evolution-manager:
+    # Interface web oficial so para o pareamento inicial via QR code -- a API
+    # de QR (/instance/connect) e reportada como instavel em algumas versoes.
+    # Nao faz parte do fluxo automatizado depois de parear, so uso pontual.
+    image: evoapicloud/evolution-manager:latest
+    container_name: pafil-evolution-manager
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    depends_on:
+      - evolution-api
+
 volumes:
   n8n_data:
   evolution_db_data:
