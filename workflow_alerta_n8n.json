@@ -1,0 +1,264 @@
+{
+  "name": "Pafil - alerta de reporting que nao saiu",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 15
+            }
+          ]
+        }
+      },
+      "id": "gatilho-15min",
+      "name": "Gatilho 15min",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -260,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM reporting.v_falhas_do_dia;",
+        "options": {}
+      },
+      "id": "falhas-do-dia",
+      "name": "Falhas do dia",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -40,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Uma mensagem so por rodada, mesmo com varias falhas: quem recebe o alerta\n// precisa de um aviso que leia de uma vez, nao de uma rajada de mensagens.\n// O separador de linha vem de String.fromCharCode(10), sem escape no texto, para\n// nao depender de como a barra invertida sobrevive entre o arquivo JSON e o\n// editor do n8n.\nconst NL = String.fromCharCode(10);\nconst falhas = $input.all().map((i) => i.json);\n\nconst linhas = falhas.map((f) => {\n  const hora = String(f.hora).slice(0, 5);\n  const motivo = Number(f.tentativas) > 0\n    ? `${f.tentativas} tentativa(s), último erro: ${f.ultimo_erro ?? 'sem detalhe'}`\n    : 'nenhuma tentativa registrada (o envio nunca chegou a entrar na fila)';\n  return `- ${f.titulo} para ${f.destinatario_nome} (${f.canal}, previsto ${hora}): ${motivo}`;\n});\n\nconst texto = [\n  `Reporting: ${falhas.length} envio(s) de hoje não saíram dentro da janela.`,\n  '',\n  ...linhas,\n  '',\n  'Histórico: SELECT * FROM reporting.envio_log WHERE referencia = current_date;',\n].join(NL);\n\nreturn [{ json: { texto, ids: falhas.map((f) => f.distribuicao_id) } }];\n"
+      },
+      "id": "montar-aviso",
+      "name": "Montar aviso",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        180,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT nome, whatsapp, email FROM reporting.destinatario WHERE ativo AND recebe_alertas;",
+        "options": {}
+      },
+      "id": "administradores",
+      "name": "Administradores",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        400,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Um item por administrador e por canal que ele tem cadastrado. Quem tem os dois\n// recebe nos dois: se o motivo da falha for justamente o WhatsApp desconectado,\n// o email ainda leva o aviso.\nconst { texto, ids } = $('Montar aviso').first().json;\nconst saida = [];\n\nfor (const adm of $input.all().map((i) => i.json)) {\n  if (adm.whatsapp) saida.push({ json: { canal: 'whatsapp', destino: adm.whatsapp, nome: adm.nome, texto, ids } });\n  if (adm.email) saida.push({ json: { canal: 'email', destino: adm.email, nome: adm.nome, texto, ids } });\n}\n\nreturn saida;\n"
+      },
+      "id": "expandir-canais",
+      "name": "Expandir canais",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        620,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "expression",
+        "numberOutputs": 2,
+        "output": "={{ $json.canal === 'whatsapp' ? 0 : 1 }}",
+        "options": {}
+      },
+      "id": "canal-do-aviso",
+      "name": "Canal do aviso",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [
+        840,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://evolution-api:8080/message/sendText/pafil-reporting",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ number: $json.destino, text: $json.texto, delay: 1500 }) }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "avisar-whatsapp",
+      "name": "Avisar WhatsApp",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1060,
+        200
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "subject": "Reporting: envio que não saiu hoje",
+        "bodyContent": "={{ $json.texto.split(String.fromCharCode(10)).join('<br>') }}",
+        "toRecipients": "={{ $json.destino }}",
+        "additionalFields": {
+          "bodyContentType": "html"
+        }
+      },
+      "id": "avisar-email",
+      "name": "Avisar email",
+      "type": "n8n-nodes-base.microsoftOutlook",
+      "typeVersion": 2,
+      "position": [
+        1060,
+        400
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO reporting.alerta_log (distribuicao_id, referencia)\nSELECT distribuicao_id, referencia\nFROM reporting.v_falhas_do_dia\nWHERE distribuicao_id = ANY($1::bigint[])\nON CONFLICT DO NOTHING;",
+        "options": {
+          "queryReplacement": "={{ ['{' + $('Montar aviso').first().json.ids.join(',') + '}'] }}"
+        }
+      },
+      "id": "marcar-alertado",
+      "name": "Marcar alertado",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1300,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Gatilho 15min": {
+      "main": [
+        [
+          {
+            "node": "Falhas do dia",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Falhas do dia": {
+      "main": [
+        [
+          {
+            "node": "Montar aviso",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Montar aviso": {
+      "main": [
+        [
+          {
+            "node": "Administradores",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Administradores": {
+      "main": [
+        [
+          {
+            "node": "Expandir canais",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Expandir canais": {
+      "main": [
+        [
+          {
+            "node": "Canal do aviso",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Canal do aviso": {
+      "main": [
+        [
+          {
+            "node": "Avisar WhatsApp",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Avisar email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Avisar WhatsApp": {
+      "main": [
+        [
+          {
+            "node": "Marcar alertado",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Avisar email": {
+      "main": [
+        [
+          {
+            "node": "Marcar alertado",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "America/Sao_Paulo",
+    "saveManualExecutions": true
+  },
+  "pinData": {}
+}

@@ -1,0 +1,439 @@
+{
+  "name": "Pafil - envio de reporting",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 15
+            }
+          ]
+        }
+      },
+      "id": "gatilho-15min",
+      "name": "Gatilho 15min",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -260,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM reporting.v_fila_envio;",
+        "options": {}
+      },
+      "id": "fila-de-envio",
+      "name": "Fila de envio",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -40,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Um print por DASHBOARD, nao por destinatario: cinco pessoas recebendo o mesmo\n// painel sao cinco linhas na fila e uma unica captura. Cada captura custa ~15s\n// (load + espera de renderizacao dos visuais), entao deduplicar aqui e a\n// diferenca entre o fluxo levar segundos ou minutos.\nconst vistos = new Map();\n\nfor (const item of $input.all()) {\n  const linha = item.json;\n  if (!vistos.has(linha.dashboard_id)) {\n    vistos.set(linha.dashboard_id, {\n      dashboard_id: linha.dashboard_id,\n      url: linha.url,\n      largura: linha.largura,\n      altura: linha.altura,\n      espera_ms: linha.espera_ms,\n    });\n  }\n}\n\nreturn [...vistos.values()].map((json) => ({ json }));\n"
+      },
+      "id": "dashboards-a-capturar",
+      "name": "Dashboards a capturar",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        180,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "options": {
+          "reset": false
+        }
+      },
+      "id": "loop-dashboards",
+      "name": "Loop dashboards",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        400,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://capture-service:8000/capture",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ url: $json.url, width: $json.largura, height: $json.altura, wait_ms: $json.espera_ms }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file",
+              "outputPropertyName": "data"
+            }
+          },
+          "timeout": 120000
+        }
+      },
+      "id": "capturar-print",
+      "name": "Capturar print",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        620,
+        420
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// O HTTP Request devolve so o binario do PNG -- o JSON de saida vem vazio. Sem\n// este no, a saida do loop seria um monte de imagem sem identificacao e nao\n// daria para casar cada print com as linhas da fila.\nconst origem = $('Loop dashboards').item.json;\nconst temImagem = Boolean($binary && $binary.data);\n\n// O HTTP Request nomeia o arquivo pelo fim da URL (\"capture\", sem extensao), e\n// o node do Outlook usa esse nome no anexo. Aqui ele vira \"<dashboard>.png\".\nif (temImagem) {\n  $binary.data.fileName = `${origem.dashboard_id}.png`;\n  $binary.data.fileExtension = 'png';\n  $binary.data.mimeType = 'image/png';\n}\n\nreturn {\n  json: {\n    dashboard_id: origem.dashboard_id,\n    captura_ok: temImagem,\n    // O no de captura esta com \"continue on error\": um dashboard fora do ar nao\n    // pode derrubar o envio dos outros. Quando isso acontece o erro chega aqui\n    // no json em vez do binario, e vira motivo registrado no envio_log.\n    captura_erro: temImagem\n      ? null\n      : ($json.error?.message ?? 'capture_service nao devolveu imagem'),\n  },\n  binary: temImagem ? { data: $binary.data } : {},\n};\n",
+        "mode": "runOnceForEachItem"
+      },
+      "id": "rotular-captura",
+      "name": "Rotular captura",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        840,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Junta a fila (uma linha por destinatario) com as capturas (uma por dashboard).\n// A entrada aqui e a saida \"done\" do loop, ou seja, todas as capturas; a fila\n// original vem por referencia ao no que a consultou.\nconst capturas = new Map();\nfor (const item of $input.all()) {\n  capturas.set(item.json.dashboard_id, item);\n}\n\nconst saida = [];\nfor (const linha of $('Fila de envio').all()) {\n  const captura = capturas.get(linha.json.dashboard_id);\n  const ok = Boolean(captura && captura.json.captura_ok);\n\n  // Linhas sem captura seguem no fluxo de proposito, em vez de serem\n  // descartadas: elas viram registro de 'erro' no envio_log, e e esse registro\n  // que responde \"por que o print nao chegou hoje?\".\n  saida.push({\n    json: {\n      ...linha.json,\n      captura_ok: ok,\n      detalhe: ok\n        ? null\n        : (captura?.json.captura_erro ?? 'dashboard nao foi capturado'),\n    },\n    binary: ok ? captura.binary : {},\n  });\n}\n\nreturn saida;\n"
+      },
+      "id": "montar-envios",
+      "name": "Montar envios",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        620,
+        180
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "expression",
+        "numberOutputs": 3,
+        "output": "={{ $json.captura_ok === false ? 2 : ($json.canal === 'whatsapp' ? 0 : 1) }}",
+        "options": {}
+      },
+      "id": "canal",
+      "name": "Canal",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [
+        840,
+        180
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// O Evolution API recebe a imagem como base64 dentro do JSON, entao o binario\n// precisa virar texto antes do no de envio.\nconst entrada = $input.all();\nconst saida = [];\n\nfor (let i = 0; i < entrada.length; i++) {\n  // getBinaryDataBuffer e o caminho correto: ler item.binary.data.data direto\n  // so funciona quando o n8n guarda binario em memoria, e quebra quando esta\n  // configurado para guardar em disco (N8N_DEFAULT_BINARY_DATA_MODE=filesystem).\n  // O fallback cobre versoes do Code node que nao expoem helpers.\n  const buffer = this.helpers?.getBinaryDataBuffer\n    ? await this.helpers.getBinaryDataBuffer(i, 'data')\n    : Buffer.from(entrada[i].binary.data.data, 'base64');\n\n  saida.push({\n    json: { ...entrada[i].json, png_base64: buffer.toString('base64') },\n    pairedItem: { item: i },\n  });\n}\n\nreturn saida;\n"
+      },
+      "id": "preparar-whatsapp",
+      "name": "Preparar WhatsApp",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1060,
+        60
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://evolution-api:8080/message/sendMedia/pafil-reporting",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ number: $json.destino, mediatype: 'image', mimetype: 'image/png', fileName: $json.dashboard_id + '.png', caption: $json.legenda, media: $json.png_base64, delay: 1500 }) }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "enviar-whatsapp",
+      "name": "Enviar WhatsApp",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1280,
+        60
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "subject": "={{ $json.titulo }}",
+        "bodyContent": "={{ 'Olá, ' + $json.destinatario_nome + '.<br><br>' + $json.legenda + '<br><br>' + 'Print em anexo. Enviado automaticamente, sem necessidade de resposta.' }}",
+        "toRecipients": "={{ $json.destino }}",
+        "additionalFields": {
+          "bodyContentType": "html",
+          "attachments": {
+            "attachments": [
+              {
+                "binaryPropertyName": "data"
+              }
+            ]
+          }
+        }
+      },
+      "id": "enviar-email",
+      "name": "Enviar email",
+      "type": "n8n-nodes-base.microsoftOutlook",
+      "typeVersion": 2,
+      "position": [
+        1280,
+        240
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Os nos de envio substituem o JSON do item pela resposta da API, entao os\n// dados do envio (qual distribuicao, que dia) vem por referencia ao no anterior.\nconst origem = $('Montar envios').item.json;\n\nreturn {\n  json: {\n    distribuicao_id: origem.distribuicao_id,\n    referencia: origem.referencia,\n    status: 'enviado',\n    detalhe: null,\n  },\n};\n",
+        "mode": "runOnceForEachItem"
+      },
+      "id": "marcar-enviado",
+      "name": "Marcar enviado",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1500,
+        140
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Recebe tres tipos de item: falha de captura (vem direto do switch, com\n// `detalhe` ja preenchido) e falha de envio no WhatsApp ou no email (vem da\n// saida de erro do no, com `error`).\nconst origem = $('Montar envios').item.json;\n// `error` chega como objeto ({ message }) no HTTP Request e como texto puro no\n// node do Outlook. Lendo so `.message`, o erro do email se perdia e o registro\n// virava um dump do item.\nconst erro = typeof $json.error === 'string' ? $json.error : $json.error?.message;\nconst motivo = erro ?? $json.detalhe ?? JSON.stringify($json).slice(0, 500);\n\nreturn {\n  json: {\n    distribuicao_id: origem.distribuicao_id,\n    referencia: origem.referencia,\n    status: 'erro',\n    // Truncado: o detalhe e para diagnostico humano, e resposta de API com\n    // stack trace inteiro so atrapalha quem le a tabela.\n    detalhe: String(motivo).slice(0, 1000),\n  },\n};\n",
+        "mode": "runOnceForEachItem"
+      },
+      "id": "marcar-erro",
+      "name": "Marcar erro",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1500,
+        380
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO reporting.envio_log (distribuicao_id, referencia, status, detalhe)\nVALUES ($1, $2::date, $3, $4)\nON CONFLICT DO NOTHING;",
+        "options": {
+          "queryReplacement": "={{ [$json.distribuicao_id, $json.referencia, $json.status, $json.detalhe] }}"
+        }
+      },
+      "id": "registrar-envio",
+      "name": "Registrar envio",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1740,
+        260
+      ]
+    }
+  ],
+  "connections": {
+    "Gatilho 15min": {
+      "main": [
+        [
+          {
+            "node": "Fila de envio",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fila de envio": {
+      "main": [
+        [
+          {
+            "node": "Dashboards a capturar",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Dashboards a capturar": {
+      "main": [
+        [
+          {
+            "node": "Loop dashboards",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop dashboards": {
+      "main": [
+        [
+          {
+            "node": "Montar envios",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Capturar print",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Capturar print": {
+      "main": [
+        [
+          {
+            "node": "Rotular captura",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Rotular captura": {
+      "main": [
+        [
+          {
+            "node": "Loop dashboards",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Montar envios": {
+      "main": [
+        [
+          {
+            "node": "Canal",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Canal": {
+      "main": [
+        [
+          {
+            "node": "Preparar WhatsApp",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Enviar email",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Marcar erro",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar WhatsApp": {
+      "main": [
+        [
+          {
+            "node": "Enviar WhatsApp",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enviar WhatsApp": {
+      "main": [
+        [
+          {
+            "node": "Marcar enviado",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Marcar erro",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enviar email": {
+      "main": [
+        [
+          {
+            "node": "Marcar enviado",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Marcar erro",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Marcar enviado": {
+      "main": [
+        [
+          {
+            "node": "Registrar envio",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Marcar erro": {
+      "main": [
+        [
+          {
+            "node": "Registrar envio",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "America/Sao_Paulo",
+    "saveManualExecutions": true
+  },
+  "pinData": {}
+}

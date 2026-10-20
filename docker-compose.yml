@@ -1,10 +1,22 @@
-version: "3.8"
-
 # Stack da automação de reporting (WhatsApp + email), 100% self-hosted, sem
-# nenhuma assinatura nova. Roda dentro do WSL2 via Docker Engine (nao Docker
-# Desktop, que tem termos de licenca comercial para empresas). O Postgres de
-# producao do Pafil fica de fora desta stack por decisao explicita: o n8n
-# alcanca ele pela rede (host.docker.internal), sem containeriza-lo.
+# nenhuma assinatura nova. Roda com Docker Engine dentro do WSL2, na mesma VM
+# Windows onde vivem o Postgres de producao, a ingestao diaria (servico do
+# Windows) e o gateway do Power BI.
+#
+# Sem `version:` no topo de proposito: o Compose v2 ignora o atributo e avisa
+# que ele e obsoleto.
+#
+# Docker Engine, e nao Docker Desktop: o Desktop tem termos de licenca
+# comercial dependendo do porte da empresa, e a decisao do projeto e nao
+# adicionar assinatura nenhuma.
+#
+# ATENCAO a um detalhe de rede que nao e obvio: o Postgres esta na MESMA VM,
+# mas do lado Windows, enquanto estes containers vivem dentro do WSL2. Sao
+# duas pilhas de rede diferentes, entao "localhost" aqui dentro NAO e o
+# localhost do Windows, e `host.docker.internal:host-gateway` resolve para a
+# VM do WSL, nao para o Windows. Por isso o apelido `pafil-db` abaixo, que
+# aponta para o IP da VM na rede da empresa (estavel, ao contrario do IP
+# interno do WSL, que muda a cada reinicio). Ver README.md secao 3.
 
 services:
   n8n:
@@ -20,12 +32,20 @@ services:
       - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
       - GENERIC_TIMEZONE=America/Sao_Paulo
       - TZ=America/Sao_Paulo
+      # Endereco pelo qual o n8n se enxerga de fora. Importa para o OAuth2 do
+      # Outlook: a Redirect URL que o n8n mostra (e que precisa bater com a
+      # cadastrada no Azure) sai daqui. Com o default, quem administra por
+      # tunel SSH ate consegue usar o n8n, mas o consentimento volta com
+      # "redirect_uri_mismatch". Aponte para o endereco real da VM.
+      - WEBHOOK_URL=${WEBHOOK_URL:-http://localhost:5678/}
     volumes:
       - n8n_data:/home/node/.n8n
     extra_hosts:
-      # Permite o container alcancar servicos rodando direto no Windows
-      # (o Postgres de producao, na porta 5432) sem Docker Desktop.
-      - "host.docker.internal:host-gateway"
+      # Apelido fixo para o Postgres de producao. A credencial do n8n aponta
+      # sempre para "pafil-db", entao mudanca de IP da maquina de producao se
+      # resolve trocando uma linha do .env e subindo de novo, sem editar
+      # credencial dentro do n8n (onde a senha teria que ser redigitada).
+      - "pafil-db:${PG_HOST_IP}"
     depends_on:
       - capture-service
       - evolution-api
