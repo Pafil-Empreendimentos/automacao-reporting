@@ -1,0 +1,3 @@
+# Dependencias do scripts/aplicar_reporting.py (a stack em si roda em Docker).
+psycopg[binary]==3.2.3    # driver PostgreSQL
+python-dotenv==1.0.1      # carrega o .env

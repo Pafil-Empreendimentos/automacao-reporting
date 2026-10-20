@@ -1,8 +1,8 @@
 -- grants_reporting.sql — role dedicado para a automação de reporting.
 --
--- Rodar DEPOIS de aplicar_reporting.py, e a partir da raiz do v2:
+-- Rodar DEPOIS de aplicar o reporting.sql, a partir da raiz do repositorio:
 --
---   psql -d pafil_dw -U pafil_app -f automacao_reporting/sql/grants_reporting.sql
+--   psql -d pafil_dw -U pafil_app -f sql/grants_reporting.sql
 --
 -- A senha é pedida na hora (\prompt), para não ficar no histórico do shell nem
 -- na lista de processos. Guarde-a junto das outras, no mesmo arquivo de

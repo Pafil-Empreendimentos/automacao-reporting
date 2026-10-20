@@ -3,6 +3,12 @@
 # Windows onde vivem o Postgres de producao, a ingestao diaria (servico do
 # Windows) e o gateway do Power BI.
 #
+# `name:` fixo de proposito: o Compose usa o nome da pasta como nome do projeto, e
+# o nome do projeto vira prefixo dos volumes (n8n_data, evolution_instances...). Sem
+# isto, clonar o repositorio numa pasta de outro nome criaria volumes novos e vazios,
+# e o n8n perderia credenciais, workflows e o pareamento do WhatsApp.
+name: automacao_reporting
+
 # Sem `version:` no topo de proposito: o Compose v2 ignora o atributo e avisa
 # que ele e obsoleto.
 #
@@ -16,7 +22,7 @@
 # localhost do Windows, e `host.docker.internal:host-gateway` resolve para a
 # VM do WSL, nao para o Windows. Por isso o apelido `pafil-db` abaixo, que
 # aponta para o IP da VM na rede da empresa (estavel, ao contrario do IP
-# interno do WSL, que muda a cada reinicio). Ver README.md secao 3.
+# interno do WSL, que muda a cada reinicio). Ver docs/guia-completo.md secao 3.
 
 services:
   n8n:
@@ -60,7 +66,7 @@ services:
       - CAPTURE_API_KEY=${CAPTURE_API_KEY}
     volumes:
       # Gerado uma vez por login_once.py (rodado localmente, fora do Docker).
-      # Ver README.md desta pasta.
+      # Ver docs/guia-completo.md secao 4.
       - ./capture_service/storage_state.json:/app/storage_state.json:ro
 
   evolution-db:
@@ -110,7 +116,7 @@ services:
     # POST /instance/create (com "qrcode": true) devolve o QR em
     # qrcode.base64; GET /instance/connect/{instanceName} gera um novo se o
     # primeiro expirar (o QR expira rapido, escaneie assim que gerar). Ver
-    # README.md secao 4.
+    # docs/guia-completo.md secao 5.
     image: evoapicloud/evolution-manager:v2.0.0
     container_name: pafil-evolution-manager
     restart: "no"

@@ -33,7 +33,7 @@ def main(url: str) -> None:
         )
         context.storage_state(path="storage_state.json")
         browser.close()
-    print("Gerado storage_state.json -- copie para automacao_reporting/capture_service/")
+    print("Gerado storage_state.json -- copie para capture_service/ na raiz do repositorio")
 
 
 if __name__ == "__main__":

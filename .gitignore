@@ -1,0 +1,19 @@
+# Segredos e ambiente
+.env
+.env.*
+!.env.example
+
+# Sessao autenticada do Power BI (gerada por capture_service/login_once.py): nunca versionar
+capture_service/storage_state.json
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Editor e sistema
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

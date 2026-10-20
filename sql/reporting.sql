@@ -2,10 +2,11 @@
 -- WhatsApp/email. É metadado operacional da automação, NÃO faz parte da
 -- linhagem bronze -> silver -> gold; por isso mora aqui, junto da stack que o
 -- consome, e não em sql/<camada>/. Mora no mesmo banco de produção (pafil_dw),
--- que a VM da automação alcança pela rede interna — ver README.md seção 3, que
+-- que a VM da automação alcança pela rede interna — ver docs/guia-completo.md seção 3, que
 -- cobre a liberação necessária (listen_addresses, pg_hba.conf e firewall).
 --
---   python aplicar_reporting.py            (a partir da raiz do v2)
+--   python scripts/aplicar_reporting.py    (a partir da raiz do repositorio)
+--   ou: psql -h 127.0.0.1 -U pafil_app -d pafil_dw -f sql/reporting.sql
 --
 -- Idempotente: CREATE ... IF NOT EXISTS / CREATE OR REPLACE em tudo, pode
 -- rodar de novo a cada mudança.
@@ -276,7 +277,7 @@ COMMENT ON VIEW reporting.v_falhas_do_dia IS
 
 -- --- Exemplos de configuração ------------------------------------------------
 -- Comentados de propósito: URL, telefone e email reais entram à mão, direto no
--- banco de produção, e não versionados aqui (LGPD — ver SKILL.md seção 2).
+-- banco de produção, e não versionados aqui (LGPD: dado pessoal só existe no banco da empresa).
 --
 -- INSERT INTO reporting.dashboard (dashboard_id, titulo, url) VALUES
 --   ('vendas-diario', 'Vendas — acompanhamento diário',
