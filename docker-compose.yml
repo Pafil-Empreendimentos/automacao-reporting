@@ -97,6 +97,16 @@ services:
       - AUTHENTICATION_API_KEY=${EVOLUTION_API_KEY}
       - DATABASE_PROVIDER=postgresql
       - DATABASE_CONNECTION_URI=postgresql://evolution:${EVOLUTION_DB_PASSWORD}@evolution-db:5432/evolution
+      # Esta stack nao tem Redis, mas o Evolution sobe com o cache em Redis LIGADO: o
+      # .env.example do projeto traz CACHE_REDIS_ENABLED=true apontando para
+      # redis://localhost:6379/6. Com o Redis ligado, as chaves da sessao do WhatsApp
+      # (tudo, menos as credenciais) vao para ele. Sem um Redis la, em 29/out/2026 a VM
+      # mostrou o log cheio de "redis disconnected" (duas vezes por segundo), a instancia
+      # presa em "connecting" e envios de texto e de imagem estourando o timeout. Com o
+      # Redis desligado, o cache fica local e as chaves da sessao vao para arquivos no
+      # volume evolution_instances (montado logo abaixo).
+      - CACHE_REDIS_ENABLED=false
+      - CACHE_LOCAL_ENABLED=true
     volumes:
       - evolution_instances:/evolution/instances
     depends_on:

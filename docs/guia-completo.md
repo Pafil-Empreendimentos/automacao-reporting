@@ -366,7 +366,8 @@ pareamento funciona direto pela API, testado e funcionando em 26/ago/2026:
    ```bash
    curl -s http://localhost:8080/instance/connectionState/pafil-reporting -H "apikey: SUA_CHAVE"
    ```
-   Deve retornar `"state":"open"`.
+   Deve retornar `"state":"open"`. Se ficar em `connecting`, veja a tabela de
+   diagnóstico da seção 9.
 6. Para enviar a um **grupo**, o número precisa estar dentro dele: peça a um
    administrador do grupo que adicione o número da automação. Depois, descubra o
    identificador do grupo (termina em `@g.us`), no PowerShell da VM:
@@ -607,7 +608,8 @@ ORDER BY l.enviado_em DESC;
 | `envio_log` com `sessao do Power BI pede nova verificacao de identidade e o aviso nao saiu com Cancelar` | O serviço dispensa esse aviso sozinho (clica em Cancelar, até 4 vezes). Se ele não saiu, o texto ou o botão mudou: abra o relatório pelo `login_once.py` e veja o que aparece, ou refaça a seção 4 |
 | `envio_log` com `janela aberta sobre o relatorio: ...` | Há um aviso aberto por cima do relatório (o texto vem no erro): abra o relatório pelo `login_once.py`, dispense o aviso e salve a sessão de novo |
 | Print cortado à direita | O relatório está em "Tamanho real": na janela do `login_once.py`, escolha Exibir e Ajustar à página (seção 4). Se continuar cortado, aumente `largura` na `reporting.dashboard` (o painel lateral do Power BI Service come ~350px fixos) |
-| WhatsApp não sai | `connectionState` da instância deixou de ser `open` — refaça o pareamento (seção 5) |
+| WhatsApp não sai | `connectionState` da instância deixou de ser `open`: veja a linha abaixo antes de refazer o pareamento (seção 5) |
+| Instância presa em `connecting`, texto e imagem estouram o timeout e o log do `pafil-evolution` repete `redis disconnected` | O Evolution sobe com o cache em Redis ligado e a stack não tem Redis. Confira que o serviço `evolution-api` do `docker-compose.yml` tem `CACHE_REDIS_ENABLED=false` e `CACHE_LOCAL_ENABLED=true` e recrie o container (`docker compose up -d evolution-api`). Foi o que travou o primeiro envio real, em 29/out/2026 |
 | Tudo parou depois de um reboot da VM | O WSL2 não subiu sozinho — ver as duas peças no fim da seção 2 |
 | Envio parou do nada, sem erro no n8n | Alguém reexecutou o `provisionar_postgres.ps1` (do data-hub-pafil) e o `pg_hba.conf` voltou ao padrão (ver seção 3) |
 | Credenciais do n8n "sumiram" | Volume recriado sem `N8N_ENCRYPTION_KEY` fixa no `.env` (ver seção 1) |
@@ -642,22 +644,25 @@ desconhecida e nome de grupo com emoji em console cp1252. O
 teste); o arquivo foi aplicado com `psql --single-transaction`, que também o
 executa numa transação só.
 
-**Não coberto pelo teste, e só se confirma na VM:**
+**Testado na VM em 29/out/2026**, com a stack de produção: o `sendText` e o
+`sendMedia` do Evolution para o grupo de teste (HTTP 201 em cerca de 3 s, com o
+PNG real de 4000x2250 e 0,40 MB) e uma execução manual de `Pafil - envio de
+reporting` no n8n, de ponta a ponta. A fila foi lida do Postgres de produção
+pela porta 15432, o relatório autenticado do Power BI foi capturado, o print
+chegou legível ao grupo de teste e todos os nós ficaram verdes, no motor de
+expressões `vm` do n8n da VM. O `sendMedia` com `number` no formato `...@g.us` e a
+listagem de grupos (`scripts/listar_grupos.py`) funcionaram. Antes desse teste, o
+primeiro envio real travava até estourar o timeout: o Evolution sobe com o cache
+em Redis ligado e a stack não tem Redis (ver a linha da instância em
+`connecting` na tabela da seção 9).
+
+**Ainda não coberto:**
 
 - O envio de email de verdade. O node do Outlook foi exercitado até a porta da
   credencial (o anexo é lido e a falha vem só de "sem credenciais"), mas sem
   conta conectada não há como ver o email chegar.
-- O WhatsApp de verdade (a instância `pafil-reporting` pareada), a captura do
-  Power BI autenticado e o Postgres de produção pela rede da VM (seção 3).
-- O envio de imagem para **grupo** e a listagem dos grupos. Não confirmei na
-  documentação oficial do Evolution API que o campo `number` do `sendMedia` aceita o
-  identificador `...@g.us`, nem o formato da resposta de `fetchAllGroups` que o
-  `scripts/listar_grupos.py` espera (campos `id`, `subject` e `size`): as duas
-  informações vêm de material da comunidade. Antes de cadastrar os grupos reais,
-  teste com um grupo de teste (você e mais uma pessoa).
-- O motor de expressões do n8n da VM é o `vm` (padrão da imagem atual); o teste
-  local usou o `legacy`. As expressões dos workflows são JavaScript comum, mas
-  vale olhar a primeira execução manual com atenção.
+- O workflow de alerta na VM e o disparo agendado de 15 em 15 minutos. Em
+  29/out/2026 só a execução manual do envio foi vista passando.
 
 **Limites conhecidos, por decisão:**
 
