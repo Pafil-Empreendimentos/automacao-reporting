@@ -273,8 +273,9 @@ que ser a `capture_service`, que é onde o `docker-compose.yml` espera encontrá
 
 **Antes de dar Enter no terminal**, faça duas coisas na janela do navegador:
 
-- Se a Microsoft mostrar "Você precisa verificar sua identidade", clique em Continuar e conclua o
-  MFA. Sem isso a sessão salva fica pedindo a verificação de novo, e o print sai com o aviso por cima.
+- Se aparecer "Você precisa verificar sua identidade", clique em **Cancelar** (duas vezes, se o
+  aviso vier em fila), e não em Continuar: nesses navegadores o popup do login abre em branco. O
+  serviço de captura também dispensa esse aviso sozinho antes do print.
 - No relatório, abra **Exibir** e escolha **Ajustar à página**. Em "Tamanho real", um relatório maior
   que a janela sai cortado à direita no print, e essa escolha fica guardada na sessão salva.
 
@@ -603,7 +604,7 @@ ORDER BY l.enviado_em DESC;
 | Alerta não chega a ninguém | Ninguém com `recebe_alertas = true`; ou os dois canais falharam (a rodada seguinte tenta de novo; veja as execuções do workflow de alerta no n8n) |
 | Alerta chegou, mas `envio_log` está vazio hoje | O envio nunca entrou na fila: confira se o workflow de envio está ativo, se tem execução com erro e se a `condicao_sql` estava falsa |
 | `envio_log` com erro só nos grupos, e as pessoas recebem | O número saiu ou foi removido do grupo, ou o identificador está errado: rode `python scripts\listar_grupos.py` e compare com `reporting.destinatario.whatsapp` |
-| `envio_log` com `sessao do Power BI pede nova verificacao de identidade` | A Microsoft pediu para confirmar a identidade de novo: refaça a seção 4 (conclua o MFA na janela) e reconstrua o serviço de captura |
+| `envio_log` com `sessao do Power BI pede nova verificacao de identidade e o aviso nao saiu com Cancelar` | O serviço dispensa esse aviso sozinho (clica em Cancelar, até 4 vezes). Se ele não saiu, o texto ou o botão mudou: abra o relatório pelo `login_once.py` e veja o que aparece, ou refaça a seção 4 |
 | `envio_log` com `janela aberta sobre o relatorio: ...` | Há um aviso aberto por cima do relatório (o texto vem no erro): abra o relatório pelo `login_once.py`, dispense o aviso e salve a sessão de novo |
 | Print cortado à direita | O relatório está em "Tamanho real": na janela do `login_once.py`, escolha Exibir e Ajustar à página (seção 4). Se continuar cortado, aumente `largura` na `reporting.dashboard` (o painel lateral do Power BI Service come ~350px fixos) |
 | WhatsApp não sai | `connectionState` da instância deixou de ser `open` — refaça o pareamento (seção 5) |
@@ -665,7 +666,8 @@ executa numa transação só.
   exige algo fora da VM (um monitor externo batendo no n8n), que hoje não existe.
 - O alerta cobre a falha de envio, não o dashboard errado. Se o Power BI entregar
   um painel vazio ou com dados velhos, o print sai normalmente. Já o aviso de
-  reautenticação, ou qualquer janela aberta por cima do relatório, vira erro e dispara o alerta.
+  reautenticação é dispensado com Cancelar pelo próprio serviço. Se ele não sair, ou se houver
+  outra janela aberta por cima do relatório, vira erro e dispara o alerta.
 - A sessão do Power BI expira e precisa ser renovada à mão (seção 4). Agora o
   sintoma é um alerta (`401 sessao do Power BI expirada`), e não mais um print de
   tela de login chegando à diretoria.

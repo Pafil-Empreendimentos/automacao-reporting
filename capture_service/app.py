@@ -48,6 +48,39 @@ def caiu_no_login(url_final: str) -> bool:
     return (urlparse(url_final).hostname or "") in HOSTS_DE_LOGIN
 
 
+def dispensar_aviso_de_identidade(page, tentativas: int = 4) -> None:
+    """Fecha o aviso "Voce precisa verificar sua identidade".
+
+    O Power BI mostra esse aviso em sessoes abertas por navegador automatizado, as vezes
+    em fila (duas vezes seguidas), mesmo com o relatorio ja carregado e com dados. Cancelar
+    so recusa a reverificacao. O aviso e dispensado, nunca confirmado: confirmar abriria
+    o login com MFA. Se ele nao sair, quem chama recusa o print.
+    """
+    dispensou = False
+    for _ in range(tentativas):
+        if not PADRAO_REAUTENTICACAO.search(page.inner_text("body")):
+            break
+        fechou = False
+        for botao in (
+            page.get_by_role("button", name=re.compile(r"^(cancelar|cancel)$", re.IGNORECASE)),
+            page.get_by_role("button", name=re.compile(r"^(fechar|close)$", re.IGNORECASE)),
+        ):
+            try:
+                botao.first.click(timeout=2000)
+                fechou = True
+                break
+            except Exception:  # sem esse botao na tela: tenta o proximo
+                continue
+        if not fechou:
+            page.keyboard.press("Escape")
+        dispensou = True
+        # Da tempo de o segundo aviso, se houver, aparecer.
+        page.wait_for_timeout(1500)
+    if dispensou:
+        # E de os visuais se refazerem depois que o aviso sai.
+        page.wait_for_timeout(2000)
+
+
 @app.post("/capture")
 def capture(req: CaptureRequest, x_api_key: str = Header(default="")):
     if x_api_key != API_KEY:
@@ -78,12 +111,14 @@ def capture(req: CaptureRequest, x_api_key: str = Header(default="")):
                     status_code=401,
                     detail="sessao do Power BI expirada -- rode login_once.py de novo e substitua o storage_state.json",
                 )
-            # Aviso de reautenticacao, ou qualquer outra janela, por cima do relatorio:
-            # melhor falhar e avisar do que mandar para a diretoria um print com o aviso.
+            # O aviso de reautenticacao e dispensado com Cancelar. Se ele sobrar, ou se houver
+            # qualquer outra janela por cima do relatorio, melhor falhar e avisar do que mandar
+            # para a diretoria um print com o aviso.
+            dispensar_aviso_de_identidade(page)
             if PADRAO_REAUTENTICACAO.search(page.inner_text("body")):
                 raise HTTPException(
                     status_code=401,
-                    detail="sessao do Power BI pede nova verificacao de identidade -- rode login_once.py de novo e substitua o storage_state.json",
+                    detail="sessao do Power BI pede nova verificacao de identidade e o aviso nao saiu com Cancelar -- rode login_once.py de novo e substitua o storage_state.json",
                 )
             dialogos = page.locator(
                 '[role="dialog"]:visible, [role="alertdialog"]:visible, [aria-modal="true"]:visible'
