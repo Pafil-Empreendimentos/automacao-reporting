@@ -1,7 +1,7 @@
 # Automação de reporting
 
 Envia, sem ninguém apertar botão, o print de dashboards publicados no Power BI Service para
-uma lista de pessoas, por WhatsApp e por e-mail. Quem recebe o quê, em que dia e em que
+uma lista de pessoas e grupos, por WhatsApp e por e-mail. Quem recebe o quê, em que dia e em que
 horário fica cadastrado no banco, e o n8n só executa.
 
 Tudo roda em software livre e hospedado pela própria empresa, sem assinatura nova.
@@ -42,7 +42,8 @@ Tudo roda em software livre e hospedado pela própria empresa, sem assinatura no
 │   ├── reporting.sql         # schema reporting (destinatários, distribuição, log, filas)
 │   └── grants_reporting.sql  # role pafil_n8n, com as permissões mínimas
 ├── scripts/
-│   └── aplicar_reporting.py  # aplica o schema e confere os objetos (alternativa ao psql)
+│   ├── aplicar_reporting.py  # aplica o schema e confere os objetos (alternativa ao psql)
+│   └── listar_grupos.py      # lista os grupos de WhatsApp e seus identificadores
 └── docs/
     └── guia-completo.md      # instalação, operação e diagnóstico, passo a passo
 ```
@@ -76,7 +77,8 @@ Os containers sobem na VM, mas o envio de verdade ainda não foi ativado. Falta:
 
 - gerar a sessão autenticada do Power BI e parear o WhatsApp (seções 4 e 5 do guia);
 - configurar o e-mail pelo Outlook, que pode ficar para depois: o WhatsApp funciona sem ele;
-- cadastrar um dashboard e um destinatário de teste, rodar uma vez à mão e só então ativar os
+- cadastrar um dashboard e um destinatário de teste (de preferência um grupo, para validar o
+  envio a grupos), rodar uma vez à mão e só então ativar os
   dois workflows.
 
 O guia, na seção 10, lista o que o teste local cobriu e o que só dá para confirmar na VM.
@@ -85,5 +87,7 @@ O guia, na seção 10, lista o que o teste local cobriu e o que só dá para con
 
 - O `storage_state.json` (sessão do Power BI) e o `.env` nunca vão para o Git.
 - Telefone e e-mail de destinatários ficam só no banco, nunca no repositório.
+- O número de WhatsApp é só de automação interna. Um fluxo que converse com lead (como o
+  assistente de pré-vendas, se for para produção) usa outro número. Veja a seção 12 do guia.
 - Reexecutar o `provisionar_postgres.ps1` do data-hub-pafil reescreve o `pg_hba.conf` e derruba
   o acesso do n8n em silêncio. Veja a seção 3 do guia antes de reexecutá-lo.

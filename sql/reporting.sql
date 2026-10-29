@@ -38,9 +38,14 @@ CREATE TABLE IF NOT EXISTS reporting.dashboard (
 CREATE TABLE IF NOT EXISTS reporting.destinatario (
     destinatario_id text PRIMARY KEY,       -- slug, ex.: 'joao-diretoria'
     nome            text NOT NULL,
-    -- Formato exigido pelo Evolution API: DDI + DDD + número, só dígitos, sem
-    -- '+', sem espaço e sem traço. Ex.: 5511999998888.
-    whatsapp        text CHECK (whatsapp ~ '^[0-9]{12,15}$'),
+    -- Destino do WhatsApp, no formato que o Evolution API espera no campo `number`.
+    -- Um destinatário é uma pessoa ou um grupo:
+    --   pessoa: DDI + DDD + número, só dígitos, sem '+', espaço ou traço.
+    --           Ex.: 5511999998888
+    --   grupo : identificador do grupo, terminado em @g.us.
+    --           Ex.: 120363025486748009@g.us (scripts/listar_grupos.py lista os da instância)
+    -- A regra de formato está na constraint destinatario_whatsapp_check, logo abaixo.
+    whatsapp        text,
     email           text CHECK (email ~ '^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$'),
     ativo           boolean NOT NULL DEFAULT true,
     CHECK (whatsapp IS NOT NULL OR email IS NOT NULL)
@@ -51,6 +56,21 @@ CREATE TABLE IF NOT EXISTS reporting.destinatario (
 -- schema já foi aplicado antes desta coluna existir.
 ALTER TABLE reporting.destinatario
     ADD COLUMN IF NOT EXISTS recebe_alertas boolean NOT NULL DEFAULT false;
+
+-- Formato do `whatsapp` (pessoa ou grupo). Fica fora do CREATE TABLE pelo mesmo
+-- motivo do recebe_alertas: o schema que já foi aplicado com a regra antiga (só
+-- dígitos) passa a aceitar grupo ao reaplicar este arquivo, sem recriar a tabela.
+-- O nome é o que o Postgres dá ao CHECK de coluna, então o DROP também remove a
+-- regra antiga. NULL passa (destinatário só de email).
+ALTER TABLE reporting.destinatario DROP CONSTRAINT IF EXISTS destinatario_whatsapp_check;
+ALTER TABLE reporting.destinatario ADD CONSTRAINT destinatario_whatsapp_check
+    CHECK (whatsapp ~ '^([0-9]{12,15}|[0-9]{10,}(-[0-9]+)?@g\.us)$');
+
+-- O aviso de falha traz o erro bruto do envio. Num grupo ele apareceria para todos
+-- os membros, diretoria inclusive, então só pessoa pode receber alerta.
+ALTER TABLE reporting.destinatario DROP CONSTRAINT IF EXISTS destinatario_alerta_so_pessoa;
+ALTER TABLE reporting.destinatario ADD CONSTRAINT destinatario_alerta_so_pessoa
+    CHECK (NOT recebe_alertas OR whatsapp IS NULL OR whatsapp !~ '@g\.us$');
 
 -- --- Quem recebe o quê, por onde, quando -------------------------------------
 CREATE TABLE IF NOT EXISTS reporting.distribuicao (
@@ -288,6 +308,18 @@ COMMENT ON VIEW reporting.v_falhas_do_dia IS
 --
 -- -- Quem é avisado quando um envio não sai (ver v_falhas_do_dia):
 -- UPDATE reporting.destinatario SET recebe_alertas = true WHERE destinatario_id = 'diretoria';
+--
+-- -- Grupo de WhatsApp: é destinatário como uma pessoa, e o identificador vem de
+-- -- scripts/listar_grupos.py. O mesmo print vai para os dois grupos com uma linha
+-- -- de distribuicao por grupo (a captura acontece uma vez só):
+-- INSERT INTO reporting.destinatario (destinatario_id, nome, whatsapp) VALUES
+--   ('grupo-comercial', 'Gerentes e diretores comerciais',   '120363025486748009@g.us'),
+--   ('grupo-marketing', 'Gerentes e diretores de marketing', '120363025486748010@g.us');
+--
+-- INSERT INTO reporting.distribuicao (dashboard_id, destinatario_id, canal, hora, legenda)
+-- SELECT 'vendas-diario', destinatario_id, 'whatsapp', '08:30', 'Vendas de ontem'
+-- FROM reporting.destinatario
+-- WHERE destinatario_id IN ('grupo-comercial', 'grupo-marketing');
 --
 -- INSERT INTO reporting.distribuicao
 --   (dashboard_id, destinatario_id, canal, hora, legenda) VALUES

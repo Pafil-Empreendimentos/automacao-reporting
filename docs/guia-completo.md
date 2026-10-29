@@ -334,6 +334,16 @@ pareamento funciona direto pela API, testado e funcionando em 26/ago/2026:
    curl -s http://localhost:8080/instance/connectionState/pafil-reporting -H "apikey: SUA_CHAVE"
    ```
    Deve retornar `"state":"open"`.
+6. Para enviar a um **grupo**, o número precisa estar dentro dele: peça a um
+   administrador do grupo que adicione o número da automação. Depois, descubra o
+   identificador do grupo (termina em `@g.us`), no PowerShell da VM:
+   ```powershell
+   python scripts\listar_grupos.py
+   ```
+   O script lê a `EVOLUTION_API_KEY` do `.env` e mostra o identificador, a
+   quantidade de membros e o nome de cada grupo. Para filtrar por parte do nome
+   (maiúsculas e acentos não importam), use `--nome gerentes`. O
+   identificador é o que vai em `reporting.destinatario.whatsapp` (seção 7).
 
 ## 6. Configurando o envio de email (Outlook, sem SMTP)
 
@@ -414,7 +424,7 @@ banco e use a mesma na credencial de Postgres do n8n.
 | Objeto | Para quê |
 |---|---|
 | `reporting.dashboard` | Uma linha por **página** de dashboard a capturar: título, URL publicada, viewport, espera de renderização |
-| `reporting.destinatario` | Nome, WhatsApp (só dígitos, com DDI) e email |
+| `reporting.destinatario` | Nome, WhatsApp e email. O WhatsApp é um número de pessoa (só dígitos, com DDI) ou o identificador de um grupo (`...@g.us`) |
 | `reporting.distribuicao` | O cruzamento: quem recebe qual dashboard, por qual canal, em que dias e a partir de que hora |
 | `reporting.envio_log` | Auditoria e idempotência: o que já saiu, o que falhou e por quê |
 | `reporting.v_fila_envio` | A fila que o n8n consulta — horário, dia da semana, condição e dedupe já resolvidos |
@@ -452,6 +462,27 @@ UPDATE reporting.destinatario SET recebe_alertas = true WHERE destinatario_id = 
 Sem ninguém marcado, o workflow de alerta roda e não avisa ninguém, sem erro
 nenhum. Quem tem WhatsApp e email cadastrados recebe nos dois, de propósito: se
 a causa da falha for o WhatsApp desconectado, o email ainda leva o aviso.
+
+**Cadastrando grupos.** Um grupo é destinatário como qualquer pessoa: o
+identificador vem de `scripts\listar_grupos.py` (seção 5) e vai na coluna
+`whatsapp`. Para mandar o mesmo print aos dois grupos, uma linha de
+`distribuicao` por grupo:
+
+```sql
+INSERT INTO reporting.destinatario (destinatario_id, nome, whatsapp) VALUES
+  ('grupo-comercial', 'Gerentes e diretores comerciais',   '<id-do-grupo>@g.us'),
+  ('grupo-marketing', 'Gerentes e diretores de marketing', '<id-do-grupo>@g.us');
+
+INSERT INTO reporting.distribuicao (dashboard_id, destinatario_id, canal, hora, legenda)
+SELECT 'vendas-diario', destinatario_id, 'whatsapp', '08:30', 'Vendas de ontem'
+FROM reporting.destinatario
+WHERE destinatario_id IN ('grupo-comercial', 'grupo-marketing');
+```
+
+O print é capturado uma vez e enviado aos dois. Cada grupo tem a sua linha na fila
+e o seu registro no `envio_log`, então uma falha num grupo não impede o outro.
+Grupo não pode ter `recebe_alertas = true` (um CHECK barra): o aviso de falha traz
+o erro bruto e apareceria para todos os membros.
 
 Exemplos de `INSERT` estão comentados no fim do `reporting.sql`. Preencha com
 os dados reais direto no banco: URL, telefone e email de gente não entram no
@@ -537,6 +568,7 @@ ORDER BY l.enviado_em DESC;
 | `envio_log` com erro de captura por timeout | O dashboard demora mais que `espera_ms` para renderizar, ou o `app.py` está na versão antiga (seção 1) |
 | Alerta não chega a ninguém | Ninguém com `recebe_alertas = true`; ou os dois canais falharam (a rodada seguinte tenta de novo; veja as execuções do workflow de alerta no n8n) |
 | Alerta chegou, mas `envio_log` está vazio hoje | O envio nunca entrou na fila: confira se o workflow de envio está ativo, se tem execução com erro e se a `condicao_sql` estava falsa |
+| `envio_log` com erro só nos grupos, e as pessoas recebem | O número saiu ou foi removido do grupo, ou o identificador está errado: rode `python scripts\listar_grupos.py` e compare com `reporting.destinatario.whatsapp` |
 | Print cortado à direita | Aumente `largura` na `reporting.dashboard` (o painel lateral do Power BI Service come ~350px fixos) |
 | WhatsApp não sai | `connectionState` da instância deixou de ser `open` — refaça o pareamento (seção 5) |
 | Tudo parou depois de um reboot da VM | O WSL2 não subiu sozinho — ver as duas peças no fim da seção 2 |
@@ -559,6 +591,20 @@ email sem anexo), o nome do arquivo anexado ("capture", sem extensão), o erro d
 Outlook que o registro perdia, e a tela de login do Power BI que seguiria como
 se fosse o dashboard.
 
+**Testado em 29/out/2026, num Postgres 16 descartável** (a mudança para aceitar
+grupos): o cadastro aceitando número de pessoa e identificador de grupo, nos dois
+formatos de grupo, e recusando oito formatos errados; a atualização de um schema
+aplicado com a regra antiga (só dígitos, já com uma linha cadastrada); a
+reaplicação do arquivo sem erro e a instalação limpa; o CHECK que impede grupo de
+receber alerta; e a fila entregando o mesmo dashboard a dois grupos, em que dar
+baixa num não tira o outro da fila. O `scripts/listar_grupos.py` foi exercitado
+contra um servidor HTTP de mentira: listagem, ordenação, filtro por nome (sem
+diferenciar maiúsculas nem acentos), chave errada, servidor fora do ar, rota
+desconhecida e nome de grupo com emoji em console cp1252. O
+`scripts/aplicar_reporting.py` não foi rodado (faltava o `psycopg` na máquina de
+teste); o arquivo foi aplicado com `psql --single-transaction`, que também o
+executa numa transação só.
+
 **Não coberto pelo teste, e só se confirma na VM:**
 
 - O envio de email de verdade. O node do Outlook foi exercitado até a porta da
@@ -566,6 +612,12 @@ se fosse o dashboard.
   conta conectada não há como ver o email chegar.
 - O WhatsApp de verdade (a instância `pafil-reporting` pareada), a captura do
   Power BI autenticado e o Postgres de produção pela rede da VM (seção 3).
+- O envio de imagem para **grupo** e a listagem dos grupos. Não confirmei na
+  documentação oficial do Evolution API que o campo `number` do `sendMedia` aceita o
+  identificador `...@g.us`, nem o formato da resposta de `fetchAllGroups` que o
+  `scripts/listar_grupos.py` espera (campos `id`, `subject` e `size`): as duas
+  informações vêm de material da comunidade. Antes de cadastrar os grupos reais,
+  teste com um grupo de teste (você e mais uma pessoa).
 - O motor de expressões do n8n da VM é o `vm` (padrão da imagem atual); o teste
   local usou o `legacy`. As expressões dos workflows são JavaScript comum, mas
   vale olhar a primeira execução manual com atenção.
@@ -627,3 +679,43 @@ preservados. Faça nesta ordem, com o PowerShell para o Git e o WSL para o Docke
 
 O `docker compose down` do passo 1 é obrigatório porque os containers têm nome fixo
 (`pafil-n8n`, `pafil-capture`...), e dois conjuntos com o mesmo nome não convivem.
+
+## 12. Adicionando outra automação
+
+A regra que mantém o projeto simples: automação nova do mesmo tipo vira linha no
+banco, não workflow novo. Quase todo pedido cai em um destes três degraus, e só se
+sobe um degrau quando o pedido de verdade exige:
+
+1. **Só cadastro, sem código.** Outro dashboard, outro grupo ou pessoa, outro
+   horário ou dia da semana, ou "só manda se acontecer X" (`condicao_sql`). São
+   `INSERT`s em `reporting.dashboard`, `reporting.destinatario` e
+   `reporting.distribuicao` (seção 7). O n8n não muda.
+2. **Tipo de conteúdo novo, mudança pequena.** Hoje o conteúdo é sempre o print de
+   um dashboard. Se pedirem uma mensagem de texto montada por uma consulta
+   ("fechamento do dia: N vendas, VGV de R$ X"), muda só isto: algo no cadastro que
+   diga qual consulta gera o texto, e um ramo novo no workflow de envio. A fila, o
+   log, o dedupe, a janela e o alerta continuam os mesmos. Só construa quando o
+   primeiro pedido real chegar.
+3. **Capacidade nova, projeto próprio.** Receber mensagem (alguém pede o painel
+   pelo WhatsApp), anexar PDF ou planilha, ou conversar com lead. Pede webhook do
+   Evolution, lista de números autorizados e uma decisão sobre o canal. Alinhe com
+   a gestão antes.
+
+Duas regras para o crescimento não virar bagunça:
+
+- **Um workflow de envio só.** Se um pedido parece exigir copiar o workflow, ele
+  está pedindo o degrau 2: generalize o que existe.
+- **Este número é só de automação interna.** Qualquer fluxo que converse com lead
+  (como o assistente de pré-vendas, se ele for para produção) usa outro número ou a
+  API oficial. Misturar junta o risco de banimento e faz o gateway do assistente
+  receber as mensagens dos grupos.
+
+Antes de aceitar um pedido novo, quatro perguntas:
+
+1. Quem recebe, e o que pode circular naquele grupo (quem são os membros)?
+2. De onde vem o dado: dashboard publicado ou consulta no banco?
+3. Quando sai, e sob qual condição? Se o dado depende da carga do data-hub, o
+   horário vem depois dela, e uma `condicao_sql` pode barrar o envio com dado
+   velho (o alerta cobre falha de envio, não painel desatualizado).
+4. Quem pediu e quem aprova? Registre fora do banco (e-mail ou ticket): hoje a
+   tabela não guarda o solicitante.
