@@ -262,13 +262,45 @@ pip install playwright ; playwright install chromium
 ```
 
 ```powershell
-python C:\pafil\automacao-reporting\capture_service\login_once.py "<url-do-dashboard>"
+cd C:\pafil\automacao-reporting\capture_service
+python login_once.py "<url-do-dashboard>"
 ```
 
 Faça o login normalmente (usuário, senha, MFA) na janela que abrir, espere o
 dashboard carregar, e volte ao terminal para confirmar. Isso gera
-`storage_state.json` ao lado do script, que é exatamente onde o
-`docker-compose.yml` espera encontrá-lo.
+`storage_state.json` na pasta em que o comando rodou. Por isso o `cd` antes: tem
+que ser a `capture_service`, que é onde o `docker-compose.yml` espera encontrá-lo.
+
+**Antes de dar Enter no terminal**, faça duas coisas na janela do navegador:
+
+- Se a Microsoft mostrar "Você precisa verificar sua identidade", clique em Continuar e conclua o
+  MFA. Sem isso a sessão salva fica pedindo a verificação de novo, e o print sai com o aviso por cima.
+- No relatório, abra **Exibir** e escolha **Ajustar à página**. Em "Tamanho real", um relatório maior
+  que a janela sai cortado à direita no print, e essa escolha fica guardada na sessão salva.
+
+**Se o login ficar carregando sem fim**, ou abrir uma janelinha em branco ao clicar em
+Continuar: na própria janela, entre primeiro em `https://login.microsoftonline.com/` (e-mail,
+senha, MFA e "Continuar conectado: Sim") e só depois abra o link do relatório. Se ainda assim
+travar, rode o script com o Microsoft Edge instalado na máquina, que não precisa baixar nada:
+
+```powershell
+python login_once.py "<url-do-dashboard>" --edge
+```
+
+**Armadilha do Docker.** O `docker-compose.yml` monta `capture_service/storage_state.json`
+dentro do container. Se esse arquivo não existir quando a stack sobe, o Docker cria uma
+**pasta** com esse nome, e o `login_once.py` não consegue gravar o arquivo. Antes de subir a
+stack pela primeira vez, deixe um arquivo vazio no lugar (o login sobrescreve) e, se já
+existir uma pasta, apague-a:
+
+```powershell
+$f = 'C:\pafil\automacao-reporting\capture_service\storage_state.json'
+if (Test-Path $f -PathType Container) { Remove-Item $f -Recurse -Force }
+if (-not (Test-Path $f)) { Set-Content -Path $f -Value '{"cookies":[],"origins":[]}' -Encoding ascii }
+```
+
+Enquanto não houver sessão válida, o serviço responde `401 sessao do Power BI expirada`,
+o que é o esperado até o login ser feito.
 
 Repita este passo sempre que o `capture_service` responder `401 sessao do Power
 BI expirada` (a sessão expira periodicamente), e depois reinicie o container
@@ -412,10 +444,12 @@ para criar a coluna `recebe_alertas`, o `alerta_log` e a `v_falhas_do_dia`.
 Depois, o role dedicado da automação e suas permissões:
 
 ```bash
-psql -d pafil_dw -U pafil_app -f sql\grants_reporting.sql
+psql -h 127.0.0.1 -U postgres -d pafil_dw -f sql\grants_reporting.sql
 ```
 
-O script pede a senha do `pafil_n8n` na hora (não passe por linha de comando,
+Rode este arquivo como o superusuário `postgres`: o `pafil_app` é dono do banco, mas não tem
+`CREATEROLE`, e o script cria o role. Depois da senha do `postgres`, ele pede a do `pafil_n8n`
+na hora (não passe por linha de comando,
 que fica no histórico do shell). Guarde-a junto das outras credenciais do
 banco e use a mesma na credencial de Postgres do n8n.
 
@@ -569,7 +603,9 @@ ORDER BY l.enviado_em DESC;
 | Alerta não chega a ninguém | Ninguém com `recebe_alertas = true`; ou os dois canais falharam (a rodada seguinte tenta de novo; veja as execuções do workflow de alerta no n8n) |
 | Alerta chegou, mas `envio_log` está vazio hoje | O envio nunca entrou na fila: confira se o workflow de envio está ativo, se tem execução com erro e se a `condicao_sql` estava falsa |
 | `envio_log` com erro só nos grupos, e as pessoas recebem | O número saiu ou foi removido do grupo, ou o identificador está errado: rode `python scripts\listar_grupos.py` e compare com `reporting.destinatario.whatsapp` |
-| Print cortado à direita | Aumente `largura` na `reporting.dashboard` (o painel lateral do Power BI Service come ~350px fixos) |
+| `envio_log` com `sessao do Power BI pede nova verificacao de identidade` | A Microsoft pediu para confirmar a identidade de novo: refaça a seção 4 (conclua o MFA na janela) e reconstrua o serviço de captura |
+| `envio_log` com `janela aberta sobre o relatorio: ...` | Há um aviso aberto por cima do relatório (o texto vem no erro): abra o relatório pelo `login_once.py`, dispense o aviso e salve a sessão de novo |
+| Print cortado à direita | O relatório está em "Tamanho real": na janela do `login_once.py`, escolha Exibir e Ajustar à página (seção 4). Se continuar cortado, aumente `largura` na `reporting.dashboard` (o painel lateral do Power BI Service come ~350px fixos) |
 | WhatsApp não sai | `connectionState` da instância deixou de ser `open` — refaça o pareamento (seção 5) |
 | Tudo parou depois de um reboot da VM | O WSL2 não subiu sozinho — ver as duas peças no fim da seção 2 |
 | Envio parou do nada, sem erro no n8n | Alguém reexecutou o `provisionar_postgres.ps1` (do data-hub-pafil) e o `pg_hba.conf` voltou ao padrão (ver seção 3) |
@@ -628,7 +664,8 @@ executa numa transação só.
   fora do ar, nenhum dos dois workflows roda e ninguém é avisado. Cobrir isso
   exige algo fora da VM (um monitor externo batendo no n8n), que hoje não existe.
 - O alerta cobre a falha de envio, não o dashboard errado. Se o Power BI entregar
-  um painel vazio ou com dados velhos, o print sai normalmente.
+  um painel vazio ou com dados velhos, o print sai normalmente. Já o aviso de
+  reautenticação, ou qualquer janela aberta por cima do relatório, vira erro e dispara o alerta.
 - A sessão do Power BI expira e precisa ser renovada à mão (seção 4). Agora o
   sintoma é um alerta (`401 sessao do Power BI expirada`), e não mais um print de
   tela de login chegando à diretoria.

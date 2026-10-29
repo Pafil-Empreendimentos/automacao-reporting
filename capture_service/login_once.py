@@ -14,16 +14,28 @@ Uso (na sua maquina, fora do Docker):
     pip install playwright
     playwright install chromium
     python login_once.py https://app.powerbi.com/... (link do dashboard publicado)
+
+Se o login da Microsoft ficar carregando sem fim no Chromium de teste, use o
+Microsoft Edge instalado na maquina (nao precisa baixar nada):
+    python login_once.py https://app.powerbi.com/... --edge
 """
 
+import os
 import sys
 
 from playwright.sync_api import sync_playwright
 
 
-def main(url: str) -> None:
+def main(url: str, canal=None) -> None:
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=False)
+        # Sem a marca de automacao, o login da Microsoft se comporta como num navegador
+        # comum (em automacao ele as vezes fica carregando sem fim ou abre popup em branco).
+        browser = p.chromium.launch(
+            headless=False,
+            channel=canal,
+            args=["--disable-blink-features=AutomationControlled"],
+            ignore_default_args=["--enable-automation"],
+        )
         context = browser.new_context()
         page = context.new_page()
         page.goto(url)
@@ -33,11 +45,12 @@ def main(url: str) -> None:
         )
         context.storage_state(path="storage_state.json")
         browser.close()
-    print("Gerado storage_state.json -- copie para capture_service/ na raiz do repositorio")
+    print(f"Gerado {os.path.abspath('storage_state.json')} -- ele precisa ficar em capture_service/")
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 2:
-        print("Uso: python login_once.py <url-do-dashboard-publicado>")
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    if len(args) != 1 or any(a.startswith("--") and a != "--edge" for a in sys.argv[1:]):
+        print("Uso: python login_once.py <url-do-dashboard-publicado> [--edge]")
         sys.exit(1)
-    main(sys.argv[1])
+    main(args[0], "msedge" if "--edge" in sys.argv[1:] else None)

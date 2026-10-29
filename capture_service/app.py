@@ -1,4 +1,5 @@
 import os
+import re
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -19,6 +20,15 @@ HOSTS_DE_LOGIN = {
     "login.microsoft.com",
     "login.live.com",
 }
+
+# A sessao salva pode ser boa o bastante para o relatorio abrir e, mesmo assim, a
+# Microsoft pedir nova verificacao de identidade (MFA). A pagina continua em
+# app.powerbi.com, entao a checagem de redirecionamento acima nao pega e o print
+# sairia com a janela de aviso por cima. O texto da janela (pt-BR e en) denuncia.
+PADRAO_REAUTENTICACAO = re.compile(
+    r"verificar sua identidade|verify your identity|autentique novamente|sign in again",
+    re.IGNORECASE,
+)
 
 app = FastAPI()
 
@@ -68,6 +78,19 @@ def capture(req: CaptureRequest, x_api_key: str = Header(default="")):
                     status_code=401,
                     detail="sessao do Power BI expirada -- rode login_once.py de novo e substitua o storage_state.json",
                 )
+            # Aviso de reautenticacao, ou qualquer outra janela, por cima do relatorio:
+            # melhor falhar e avisar do que mandar para a diretoria um print com o aviso.
+            if PADRAO_REAUTENTICACAO.search(page.inner_text("body")):
+                raise HTTPException(
+                    status_code=401,
+                    detail="sessao do Power BI pede nova verificacao de identidade -- rode login_once.py de novo e substitua o storage_state.json",
+                )
+            dialogos = page.locator(
+                '[role="dialog"]:visible, [role="alertdialog"]:visible, [aria-modal="true"]:visible'
+            ).all_inner_texts()
+            if dialogos:
+                resumo = " ".join(dialogos[0].split())[:200]
+                raise HTTPException(status_code=409, detail=f"janela aberta sobre o relatorio: {resumo}")
             png_bytes = page.screenshot(full_page=False)
         finally:
             browser.close()

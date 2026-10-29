@@ -1,8 +1,10 @@
 -- grants_reporting.sql — role dedicado para a automação de reporting.
 --
--- Rodar DEPOIS de aplicar o reporting.sql, a partir da raiz do repositorio:
+-- Rodar DEPOIS de aplicar o reporting.sql, a partir da raiz do repositorio, como o
+-- superusuario postgres (o pafil_app e dono do banco, mas nao tem CREATEROLE, e este
+-- script cria o role pafil_n8n):
 --
---   psql -d pafil_dw -U pafil_app -f sql/grants_reporting.sql
+--   psql -h 127.0.0.1 -U postgres -d pafil_dw -f sql/grants_reporting.sql
 --
 -- A senha é pedida na hora (\prompt), para não ficar no histórico do shell nem
 -- na lista de processos. Guarde-a junto das outras, no mesmo arquivo de
