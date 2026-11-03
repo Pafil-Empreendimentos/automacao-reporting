@@ -98,7 +98,8 @@ CREATE TABLE IF NOT EXISTS reporting.distribuicao (
     -- limitação, não o texto da condição, que contém o estrago possível aqui.
     condicao_sql    text,
     -- Texto que acompanha o print (legenda no WhatsApp, corpo no email).
-    -- NULL = usa o título do dashboard.
+    -- NULL = usa o título do dashboard. Texto vazio ('') = sem legenda, só o
+    -- print: a view usa coalesce, que só troca NULL, então '' chega vazio ao envio.
     legenda         text,
     ativo           boolean NOT NULL DEFAULT true,
     UNIQUE (dashboard_id, destinatario_id, canal, hora),

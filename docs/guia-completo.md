@@ -374,10 +374,12 @@ pareamento funciona direto pela API, testado e funcionando em 26/ago/2026:
    ```powershell
    python scripts\listar_grupos.py
    ```
-   O script lê a `EVOLUTION_API_KEY` do `.env` e mostra o identificador, a
-   quantidade de membros e o nome de cada grupo. Para filtrar por parte do nome
-   (maiúsculas e acentos não importam), use `--nome gerentes`. O
-   identificador é o que vai em `reporting.destinatario.whatsapp` (seção 7).
+   Deixe uma janela do WSL aberta enquanto roda: é ela que faz o `localhost:8080`
+   do Windows alcançar o Evolution. O script lê a `EVOLUTION_API_KEY` do `.env` e
+   mostra o identificador, a quantidade de membros e o nome de cada grupo. Para
+   filtrar por parte do nome (maiúsculas e acentos não importam), use
+   `--nome gerentes`. O identificador é o que vai em
+   `reporting.destinatario.whatsapp` (seção 7).
 
 ## 6. Configurando o envio de email (Outlook, sem SMTP)
 
@@ -520,6 +522,12 @@ e o seu registro no `envio_log`, então uma falha num grupo não impede o outro.
 Grupo não pode ter `recebe_alertas = true` (um CHECK barra): o aviso de falha traz
 o erro bruto e apareceria para todos os membros.
 
+**Só o print, sem legenda.** A coluna `legenda` aceita texto (vira a legenda da
+imagem), `NULL` (a legenda passa a ser o título do dashboard) e texto vazio, `''`
+(a imagem vai sozinha, sem texto nenhum). Para não ter legenda, cadastre `''` e
+não `NULL`: a view usa `coalesce`, que só troca o `NULL`. O Evolution API aceita
+`caption` vazio (o esquema de validação dele só exige que seja texto).
+
 Exemplos de `INSERT` estão comentados no fim do `reporting.sql`. Preencha com
 os dados reais direto no banco: URL, telefone e email de gente não entram no
 controle de versão (LGPD: dado pessoal só existe no banco da empresa).
@@ -554,7 +562,7 @@ propósito — segredo não se versiona):
 
 | Workflow | Node | Credencial | Valor |
 |---|---|---|---|
-| envio | `Fila de envio`, `Registrar envio` | Postgres | Host `pafil-db`, porta 5432, base `pafil_dw`, usuário `pafil_n8n`, senha do passo 7 |
+| envio | `Fila de envio`, `Registrar envio` | Postgres | Host `pafil-db`, porta **15432** (o portproxy do Windows para o Postgres; a 5432 direta dá timeout a partir do WSL2), base `pafil_dw`, usuário `pafil_n8n`, senha do passo 7 |
 | envio | `Capturar print` | Header Auth | Nome `x-api-key`, valor = `CAPTURE_API_KEY` do `.env` |
 | envio | `Enviar WhatsApp` | Header Auth | Nome `apikey`, valor = `EVOLUTION_API_KEY` do `.env` |
 | envio | `Enviar email` | Microsoft Outlook OAuth2 | A credencial criada na seção 6 |
