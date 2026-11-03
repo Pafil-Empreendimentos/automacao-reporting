@@ -20,12 +20,34 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-try:
-    from dotenv import load_dotenv
 
-    load_dotenv(Path(__file__).resolve().parent.parent / ".env")
-except ImportError:
-    pass  # sem python-dotenv, a chave precisa estar no ambiente
+def carregar_env(caminho: Path) -> None:
+    """Põe no ambiente o que está no .env, sem sobrescrever o que já estava lá.
+
+    Feito à mão, e não com o python-dotenv, para o script não depender de nada além do
+    Python: sem a biblioteca, o .env era ignorado em silêncio e a chave "sumia".
+    """
+    try:
+        linhas = caminho.read_text(encoding="utf-8-sig").splitlines()
+    except OSError:
+        return
+    for linha in linhas:
+        linha = linha.strip()
+        if linha.startswith("export "):
+            linha = linha[len("export "):]
+        if not linha or linha.startswith("#") or "=" not in linha:
+            continue
+        nome, _, valor = linha.partition("=")
+        valor = valor.strip()
+        if len(valor) >= 2 and valor[0] == valor[-1] and valor[0] in "\"'":
+            valor = valor[1:-1]
+        else:
+            valor = valor.split(" #", 1)[0].rstrip()  # comentário no fim da linha
+        if nome.strip():
+            os.environ.setdefault(nome.strip(), valor)
+
+
+carregar_env(Path(__file__).resolve().parent.parent / ".env")
 
 INSTANCIA_PADRAO = "pafil-reporting"
 URL_PADRAO = "http://localhost:8080"
