@@ -51,8 +51,35 @@ JS_DESCRICAO = """els => els.map(e => {
 })"""
 JS_JANELA = "e => e.tagName + ' role=' + e.getAttribute('role') + ' modal=' + e.getAttribute('aria-modal') + (e.open ? ' open' : '') + (e.hasAttribute('inert') ? ' inert' : '')"
 
+# Controles da janela alem dos botoes (caixa de marcar, campo, link): o que pode estar segurando o Fechar.
+JS_CONTROLES = """el => [...el.querySelectorAll('input, select, textarea, a[href], [role="checkbox"], [role="radio"], mat-checkbox')]
+  .slice(0, 8)
+  .map(c => c.tagName + (c.type ? ':' + c.type : '') + (c.checked ? ' marcado' : '') + (c.disabled ? ' desativado' : '') + ' ' + (c.innerText || c.getAttribute('aria-label') || '').trim().slice(0, 40))"""
+
+# Ultimo recurso: esconde a janela e o fundo escuro dela (camadas do overlay do Angular CDK, que o Power BI usa).
+JS_OCULTAR = """el => {
+  const painel = el.closest('.cdk-overlay-pane') || el;
+  const camada = painel.closest('.cdk-global-overlay-wrapper') || painel;
+  const alvos = [camada];
+  const raiz = camada.parentElement;
+  if (raiz) raiz.querySelectorAll('.cdk-overlay-backdrop').forEach(f => alvos.push(f));
+  alvos.forEach(a => a.style.setProperty('display', 'none', 'important'));
+  return alvos.length;
+}"""
+
+# Depois de esconder: o que do overlay ainda recebe o clique em pontos da pagina (se sobrar, o print sairia escurecido).
+JS_CAMADA_SOBRANDO = """() => {
+  const sobras = [];
+  for (const [fx, fy] of [[0.05, 0.05], [0.5, 0.05], [0.95, 0.05], [0.05, 0.5], [0.5, 0.5], [0.95, 0.5], [0.05, 0.95], [0.5, 0.95], [0.95, 0.95]]) {
+    const el = document.elementFromPoint(innerWidth * fx, innerHeight * fy);
+    const camada = el && el.closest('.cdk-overlay-backdrop, .cdk-overlay-pane, .cdk-global-overlay-wrapper');
+    if (camada) sobras.push(camada.tagName + '.' + String(camada.className).slice(0, 30));
+  }
+  return sobras;
+}"""
+
 # Vai no fim do erro 409, para saber qual versao do codigo esta rodando no container.
-VERSAO_DO_CODIGO = "janela-avaliacao-v4"
+VERSAO_DO_CODIGO = "janela-avaliacao-v5"
 
 # Enquanto a avaliacao gratuita do Microsoft Fabric / Power BI esta para acabar, o Power BI abre a cada
 # sessao uma janela "Suas avaliacoes gratuitas ... terminam em N dias" por cima do relatorio. Ela so
@@ -194,7 +221,7 @@ def descrever_janela(janela) -> str:
         return ""
 
 
-def dispensar_aviso_de_avaliacao(page, tentativas: int = 3, passos=None) -> None:
+def dispensar_aviso_de_avaliacao(page, tentativas: int = 3, passos=None, espera_ms: int = 6000) -> None:
     """Fecha a janela "Suas avaliacoes gratuitas do Microsoft Fabric e do Power BI terminam em N dias".
 
     E so um aviso, mas fica por cima do relatorio e o guarda de janelas de capture() recusaria o
@@ -202,10 +229,10 @@ def dispensar_aviso_de_avaliacao(page, tentativas: int = 3, passos=None) -> None
     tenha o mesmo nome, e so entre os que fecham (BOTOES_QUE_FECHAM), nunca os de compra ou de criar
     conta. Os botoes sao achados por CSS e pelo rotulo, e nao por get_by_role, que ignora o que o
     Power BI marca como oculto para leitores de tela. Prefere o botao visivel e ativo e, na primeira
-    tentativa, espera uns segundos ele ficar assim. Se o clique falhar, tenta o clique do proprio
-    elemento; da segunda tentativa em diante aperta Escape tambem. `passos` recebe o que foi tentado e
-    por que o clique falhou, para o erro de quem chama contar a historia. Se a janela nao sair, quem
-    chama recusa o print.
+    tentativa, espera ate `espera_ms` ele ficar assim; se nao ficar, nao clica (o clique so esperaria
+    a toa) e tenta o clique do proprio elemento. Da segunda tentativa em diante aperta Escape tambem.
+    `passos` recebe o que foi tentado e por que o clique falhou, para o erro de quem chama contar a
+    historia. Se a janela nao sair, quem chama tenta ocultar_aviso_de_avaliacao e, por fim, recusa.
     """
     passos = passos if passos is not None else []
     dispensou = False
@@ -232,14 +259,18 @@ def dispensar_aviso_de_avaliacao(page, tentativas: int = 3, passos=None) -> None
             page.keyboard.press("Escape")
         else:
             nome = rotulos[alvo]
-            # So na primeira tentativa espera o botao liberar: se nao liberou em 6 s, nao vai liberar.
-            if not aguardar_botao(page, botoes, alvo, 6000 if tentativa == 1 else 0):
+            clicou = False
+            # So na primeira tentativa espera o botao liberar: se nao liberou, nao vai liberar.
+            if aguardar_botao(page, botoes, alvo, espera_ms if tentativa == 1 else 0):
+                try:
+                    botoes.nth(alvo).click(timeout=2000)
+                    passos.append(f"{tentativa}: clique em {nome} ok")
+                    clicou = True
+                except Exception as erro:  # coberto por outra coisa: o motivo vem no call log do Playwright
+                    passos.append(f"{tentativa}: clique em {nome} falhou ({type(erro).__name__}: {motivo_do_erro(erro)})")
+            else:
                 passos.append(f"{tentativa}: {nome} nao esta visivel e ativo")
-            try:
-                botoes.nth(alvo).click(timeout=2000)
-                passos.append(f"{tentativa}: clique em {nome} ok")
-            except Exception as erro:  # desativado, oculto ou coberto: o motivo vem no call log do Playwright
-                passos.append(f"{tentativa}: clique em {nome} falhou ({type(erro).__name__}: {motivo_do_erro(erro)})")
+            if not clicou:
                 if tentativa == 1:
                     passos.append(f"botoes: {descrever_botoes(botoes)}; janela: {descrever_janela(janela)}")
                 try:
@@ -254,6 +285,39 @@ def dispensar_aviso_de_avaliacao(page, tentativas: int = 3, passos=None) -> None
     if dispensou:
         # E de os visuais se refazerem depois que a janela sai.
         page.wait_for_timeout(2000)
+
+
+def ocultar_aviso_de_avaliacao(page, passos) -> str:
+    """Ultimo recurso: esconde so para o print a janela de avaliacao e o fundo escuro dela.
+
+    Em 04/nov/2026 o Fechar dessa janela vinha desativado no navegador do servico e nada o liberava
+    (nem espera, nem Escape). A janela so informa, entao esconder as camadas dela (a janela e o fundo
+    escuro do overlay do Angular CDK) nao mexe no relatorio nem na conta. Depois confere que a janela
+    saiu e que nenhuma camada do overlay ainda recebe o clique em pontos da pagina; se sobrar algo, o
+    print sairia escurecido, e quem chama recusa. Devolve "nada" (a janela nao esta na tela),
+    "ocultada" ou "falhou".
+    """
+    try:
+        achado = achar_aviso_de_avaliacao(page)
+        if achado is None:
+            return "nada"
+        janela = achado[0]
+        passos.append(f"controles: {', '.join(janela.evaluate(JS_CONTROLES, timeout=2000)) or 'nenhum'}")
+        texto = " ".join(janela.inner_text(timeout=2000).split())[:600]
+        escondidas = janela.evaluate(JS_OCULTAR, timeout=2000)
+        page.wait_for_timeout(500)
+        sobras = page.evaluate(JS_CAMADA_SOBRANDO)
+        ainda_aberta = achar_aviso_de_avaliacao(page) is not None
+    except Exception as erro:  # so um recurso: se falhar, capture() recusa o print
+        passos.append(f"ocultar: nao deu ({type(erro).__name__})")
+        return "falhou"
+    if ainda_aberta or sobras:
+        motivo = "a janela continua na tela" if ainda_aberta else f"ainda ha overlay na pagina ({', '.join(sobras[:3])})"
+        passos.append(f"ocultar: {escondidas} camada(s) escondida(s), mas {motivo}")
+        passos.append(f"texto da janela: {texto}")
+        return "falhou"
+    passos.append(f"ocultar: {escondidas} camada(s) escondida(s)")
+    return "ocultada"
 
 
 def botoes_da_janela(page) -> str:
@@ -300,17 +364,26 @@ def capture(req: CaptureRequest, x_api_key: str = Header(default="")):
             # sobrar, ou se houver qualquer outra janela por cima do relatorio, melhor falhar e
             # avisar do que mandar para a diretoria um print com a janela.
             passos = []
-            for _ in range(2):
+            for rodada in range(2):
                 dispensar_aviso_de_identidade(page)
-                dispensar_aviso_de_avaliacao(page, passos=passos)
+                dispensar_aviso_de_avaliacao(page, passos=passos, espera_ms=6000 if rodada == 0 else 0)
+            # Se o Fechar da janela de avaliacao vem desativado e nada o libera, o ultimo recurso e esconder
+            # a janela e o fundo escuro dela so para o print, conferindo que nada escureceu a pagina.
+            escondeu = ocultar_aviso_de_avaliacao(page, passos)
+            avisos = "janela de avaliacao ocultada" if escondeu == "ocultada" else ("janela de avaliacao fechada" if passos else "")
             if PADRAO_REAUTENTICACAO.search(page.inner_text("body")):
                 raise HTTPException(
                     status_code=401,
                     detail="sessao do Power BI pede nova verificacao de identidade e o aviso nao saiu com Cancelar -- rode login_once.py de novo e substitua o storage_state.json",
                 )
             dialogos = page.locator(SELETOR_JANELAS).all_inner_texts()
-            if dialogos:
-                resumo = " ".join(dialogos[0].split())[:200]
+            # "falhou" sem janela na tela: ela foi escondida, mas algo do overlay ainda cobre a pagina.
+            if dialogos or escondeu == "falhou":
+                resumo = (
+                    " ".join(dialogos[0].split())[:200]
+                    if dialogos
+                    else "a janela de avaliacao foi escondida, mas o overlay ainda cobre a pagina"
+                )
                 tentou = f" | tentou: {'; '.join(passos)}"[:1800] if passos else ""
                 outras = " // ".join(" ".join(texto.split())[:80] for texto in dialogos[1:4])
                 outras = f" | outras janelas: {outras}" if outras else ""
@@ -322,4 +395,4 @@ def capture(req: CaptureRequest, x_api_key: str = Header(default="")):
         finally:
             browser.close()
 
-    return Response(content=png_bytes, media_type="image/png")
+    return Response(content=png_bytes, media_type="image/png", headers={"x-avisos": avisos} if avisos else None)
