@@ -37,8 +37,22 @@ SELETOR_JANELAS = '[role="dialog"]:visible, [role="alertdialog"]:visible, [aria-
 SELETOR_BOTOES = 'button, [role="button"]'
 JS_ROTULOS = "els => els.map(e => e.getAttribute('aria-label') || e.innerText || e.title || '')"
 
+# So para o erro 409 contar como esta cada botao da janela (visivel, ativo, tamanho, o que o cobre) e a
+# propria janela, quando o clique em Fechar nao funciona.
+JS_DESCRICAO = """els => els.map(e => {
+  const r = e.getBoundingClientRect();
+  const cs = getComputedStyle(e);
+  const topo = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+  const coberto = topo && topo !== e && !e.contains(topo) ? ', coberto por ' + topo.tagName + '.' + String(topo.className).slice(0, 30) : '';
+  const rotulo = (e.getAttribute('aria-label') || e.innerText || e.title || '').trim().slice(0, 30);
+  const visivel = r.width > 0 && r.height > 0 && cs.visibility !== 'hidden' && cs.display !== 'none';
+  const ativo = !e.disabled && e.getAttribute('aria-disabled') !== 'true';
+  return rotulo + ' (' + (visivel ? 'visivel' : 'oculto') + ', ' + (ativo ? 'ativo' : 'desativado') + ', ' + Math.round(r.width) + 'x' + Math.round(r.height) + coberto + ')';
+})"""
+JS_JANELA = "e => e.tagName + ' role=' + e.getAttribute('role') + ' modal=' + e.getAttribute('aria-modal') + (e.open ? ' open' : '') + (e.hasAttribute('inert') ? ' inert' : '')"
+
 # Vai no fim do erro 409, para saber qual versao do codigo esta rodando no container.
-VERSAO_DO_CODIGO = "janela-avaliacao-v3"
+VERSAO_DO_CODIGO = "janela-avaliacao-v4"
 
 # Enquanto a avaliacao gratuita do Microsoft Fabric / Power BI esta para acabar, o Power BI abre a cada
 # sessao uma janela "Suas avaliacoes gratuitas ... terminam em N dias" por cima do relatorio. Ela so
@@ -115,7 +129,7 @@ def rotulos_dos_botoes(botoes) -> list:
 
 
 def achar_aviso_de_avaliacao(page):
-    """Botoes e rotulos da janela de avaliacao que esta aberta, ou None se ela nao esta na tela.
+    """Janela, botoes e rotulos da janela de avaliacao que esta aberta, ou None se ela nao esta na tela.
 
     O texto e conferido aqui, em Python, e nao com filter(has_text=regex): o Playwright avalia a
     regex no navegador, onde o curinga de letra so pega ASCII, e a janela real nunca era achada.
@@ -123,9 +137,61 @@ def achar_aviso_de_avaliacao(page):
     janelas = page.locator(SELETOR_JANELAS)
     for i, texto in enumerate(janelas.all_inner_texts()):
         if PADRAO_AVISO_DE_AVALIACAO.search(texto):
-            botoes = janelas.nth(i).locator(SELETOR_BOTOES)
-            return botoes, rotulos_dos_botoes(botoes)
+            janela = janelas.nth(i)
+            botoes = janela.locator(SELETOR_BOTOES)
+            return janela, botoes, rotulos_dos_botoes(botoes)
     return None
+
+
+def escolher_botao_que_fecha(botoes, rotulos):
+    """Indice do botao que fecha: o primeiro, na ordem de BOTOES_QUE_FECHAM, que esta visivel e ativo.
+
+    Se nenhum estiver, o primeiro com o rotulo certo (quem chama espera e tenta). None se nao houver.
+    """
+    candidatos = [i for padrao in BOTOES_QUE_FECHAM for i, rotulo in enumerate(rotulos) if padrao.search(rotulo)]
+    for i in candidatos:
+        try:
+            if botoes.nth(i).is_visible() and botoes.nth(i).is_enabled():
+                return i
+        except Exception:  # o botao sumiu no meio: tenta o proximo
+            continue
+    return candidatos[0] if candidatos else None
+
+
+def aguardar_botao(page, botoes, i, ms) -> bool:
+    """Espera ate `ms` o botao ficar visivel e ativo: um aviso pode liberar o Fechar so depois de uns segundos."""
+    esperou = 0
+    while True:
+        try:
+            if botoes.nth(i).is_visible() and botoes.nth(i).is_enabled():
+                return True
+        except Exception:  # o botao sumiu no meio
+            return False
+        if esperou >= ms:
+            return False
+        page.wait_for_timeout(500)
+        esperou += 500
+
+
+def motivo_do_erro(erro) -> str:
+    """Ultimas linhas do erro do Playwright: o call log diz se o botao esta desativado, oculto ou coberto."""
+    linhas = [" ".join(linha.split()) for linha in str(erro).splitlines() if linha.strip()]
+    return " / ".join(linha[:120] for linha in linhas[-3:])
+
+
+def descrever_botoes(botoes) -> str:
+    """Como cada botao esta na tela (visivel, ativo, tamanho, o que o cobre), so para o erro contar."""
+    try:
+        return ", ".join(botoes.evaluate_all(JS_DESCRICAO))
+    except Exception:  # so diagnostico: nao pode esconder o erro que ja vai ser devolvido
+        return ""
+
+
+def descrever_janela(janela) -> str:
+    try:
+        return str(janela.evaluate(JS_JANELA, timeout=2000))
+    except Exception:  # so diagnostico
+        return ""
 
 
 def dispensar_aviso_de_avaliacao(page, tentativas: int = 3, passos=None) -> None:
@@ -135,15 +201,23 @@ def dispensar_aviso_de_avaliacao(page, tentativas: int = 3, passos=None) -> None
     print. O botao e escolhido dentro da propria janela, para nao fechar um painel do relatorio que
     tenha o mesmo nome, e so entre os que fecham (BOTOES_QUE_FECHAM), nunca os de compra ou de criar
     conta. Os botoes sao achados por CSS e pelo rotulo, e nao por get_by_role, que ignora o que o
-    Power BI marca como oculto para leitores de tela. Se o clique falhar, tenta o clique do proprio
-    elemento; sem botao assim, tenta Escape. `passos` recebe o que foi tentado, para o erro de quem
-    chama contar a historia. Se a janela nao sair, quem chama recusa o print.
+    Power BI marca como oculto para leitores de tela. Prefere o botao visivel e ativo e, na primeira
+    tentativa, espera uns segundos ele ficar assim. Se o clique falhar, tenta o clique do proprio
+    elemento; da segunda tentativa em diante aperta Escape tambem. `passos` recebe o que foi tentado e
+    por que o clique falhou, para o erro de quem chama contar a historia. Se a janela nao sair, quem
+    chama recusa o print.
     """
     passos = passos if passos is not None else []
     dispensou = False
     for tentativa in range(1, tentativas + 1):
         try:
             achado = achar_aviso_de_avaliacao(page)
+            if achado is not None and tentativa > 1:
+                # O clique da tentativa anterior nao tirou a janela: Escape tambem.
+                page.keyboard.press("Escape")
+                passos.append(f"{tentativa}: Escape")
+                page.wait_for_timeout(700)
+                achado = achar_aviso_de_avaliacao(page)
         except Exception as erro:  # a pagina pode ter mudado no meio da leitura; capture() confere de novo
             passos.append(f"{tentativa}: nao deu para ler a janela ({type(erro).__name__})")
             break
@@ -151,23 +225,25 @@ def dispensar_aviso_de_avaliacao(page, tentativas: int = 3, passos=None) -> None
             if tentativa > 1:
                 passos.append(f"{tentativa}: a janela saiu")
             break
-        botoes, rotulos = achado
-        alvo = next(
-            (i for padrao in BOTOES_QUE_FECHAM for i, rotulo in enumerate(rotulos) if padrao.search(rotulo)),
-            None,
-        )
+        janela, botoes, rotulos = achado
+        alvo = escolher_botao_que_fecha(botoes, rotulos)
         if alvo is None:
             passos.append(f"{tentativa}: nenhum botao que fecha, Escape")
             page.keyboard.press("Escape")
         else:
             nome = rotulos[alvo]
+            # So na primeira tentativa espera o botao liberar: se nao liberou em 6 s, nao vai liberar.
+            if not aguardar_botao(page, botoes, alvo, 6000 if tentativa == 1 else 0):
+                passos.append(f"{tentativa}: {nome} nao esta visivel e ativo")
             try:
                 botoes.nth(alvo).click(timeout=2000)
                 passos.append(f"{tentativa}: clique em {nome} ok")
-            except Exception as erro:  # coberto por outra coisa, ou sem tamanho: clica pelo proprio elemento
-                passos.append(f"{tentativa}: clique em {nome} falhou ({type(erro).__name__})")
+            except Exception as erro:  # desativado, oculto ou coberto: o motivo vem no call log do Playwright
+                passos.append(f"{tentativa}: clique em {nome} falhou ({type(erro).__name__}: {motivo_do_erro(erro)})")
+                if tentativa == 1:
+                    passos.append(f"botoes: {descrever_botoes(botoes)}; janela: {descrever_janela(janela)}")
                 try:
-                    botoes.nth(alvo).evaluate("el => el.click()")
+                    botoes.nth(alvo).evaluate("el => el.click()", timeout=2000)
                     passos.append(f"{tentativa}: clique do DOM em {nome} ok")
                 except Exception as erro_dom:
                     passos.append(f"{tentativa}: clique do DOM em {nome} falhou ({type(erro_dom).__name__}), Escape")
@@ -235,10 +311,12 @@ def capture(req: CaptureRequest, x_api_key: str = Header(default="")):
             dialogos = page.locator(SELETOR_JANELAS).all_inner_texts()
             if dialogos:
                 resumo = " ".join(dialogos[0].split())[:200]
-                tentou = f" | tentou: {'; '.join(passos)}"[:600] if passos else ""
+                tentou = f" | tentou: {'; '.join(passos)}"[:1800] if passos else ""
+                outras = " // ".join(" ".join(texto.split())[:80] for texto in dialogos[1:4])
+                outras = f" | outras janelas: {outras}" if outras else ""
                 raise HTTPException(
                     status_code=409,
-                    detail=f"janela aberta sobre o relatorio: {resumo}{botoes_da_janela(page)}{tentou} [{VERSAO_DO_CODIGO}]",
+                    detail=f"janela aberta sobre o relatorio: {resumo}{botoes_da_janela(page)}{outras}{tentou} [{VERSAO_DO_CODIGO}]",
                 )
             png_bytes = page.screenshot(full_page=False)
         finally:
