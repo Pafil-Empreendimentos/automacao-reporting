@@ -36,8 +36,10 @@ SELETOR_JANELAS = '[role="dialog"]:visible, [role="alertdialog"]:visible, [aria-
 # Enquanto a avaliacao gratuita do Microsoft Fabric / Power BI esta para acabar, o Power BI abre a cada
 # sessao uma janela "Suas avaliacoes gratuitas ... terminam em N dias" por cima do relatorio. Ela so
 # informa e nao pede nada, entao da para fechar; qualquer outra janela continua barrando o print.
+# O texto e conferido em Python, de proposito: no navegador (filter has_text) a regex nao pega letra
+# acentuada, e "avaliacoes" aparece com cedilha e til.
 PADRAO_AVISO_DE_AVALIACAO = re.compile(
-    r"avalia\w+ gratuita|free trial|trial\W+(ends?|expires?)",
+    r"avalia\S{1,10}\s+gratuita|free\s+trial|trial\W+(ends?|expires?)",
     re.IGNORECASE,
 )
 
@@ -110,12 +112,16 @@ def dispensar_aviso_de_avaliacao(page, tentativas: int = 3) -> None:
     """
     dispensou = False
     for _ in range(tentativas):
-        janela = page.locator(SELETOR_JANELAS).filter(has_text=PADRAO_AVISO_DE_AVALIACAO)
-        if janela.count() == 0:
+        # Conferido aqui, em Python, e nao com filter(has_text=regex): o Playwright avalia a regex no
+        # navegador, onde o curinga de letra so pega ASCII, e a janela real nunca era encontrada.
+        janelas = page.locator(SELETOR_JANELAS)
+        posicoes = [i for i, texto in enumerate(janelas.all_inner_texts()) if PADRAO_AVISO_DE_AVALIACAO.search(texto)]
+        if not posicoes:
             break
+        janela = janelas.nth(posicoes[0])
         fechou = False
         for padrao in BOTOES_QUE_FECHAM:
-            botao = janela.first.get_by_role("button", name=padrao)
+            botao = janela.get_by_role("button", name=padrao)
             if botao.count() == 0:
                 continue
             try:
