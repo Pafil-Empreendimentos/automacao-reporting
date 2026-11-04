@@ -30,6 +30,25 @@ PADRAO_REAUTENTICACAO = re.compile(
     re.IGNORECASE,
 )
 
+# Janelas que o Power BI abre por cima do relatorio.
+SELETOR_JANELAS = '[role="dialog"]:visible, [role="alertdialog"]:visible, [aria-modal="true"]:visible'
+
+# Enquanto a avaliacao gratuita do Microsoft Fabric / Power BI esta para acabar, o Power BI abre a cada
+# sessao uma janela "Suas avaliacoes gratuitas ... terminam em N dias" por cima do relatorio. Ela so
+# informa e nao pede nada, entao da para fechar; qualquer outra janela continua barrando o print.
+PADRAO_AVISO_DE_AVALIACAO = re.compile(
+    r"avalia\w+ gratuita|free trial|trial\W+(ends?|expires?)",
+    re.IGNORECASE,
+)
+
+# So botoes que fecham. Nunca os de compra, upgrade ou continuar, que abririam outro fluxo.
+BOTOES_QUE_FECHAM = (
+    re.compile(r"^(fechar|close)$", re.IGNORECASE),
+    re.compile(r"^(agora n[a\xe3]o|not now)$", re.IGNORECASE),
+    re.compile(r"^(dispensar|dismiss)$", re.IGNORECASE),
+    re.compile(r"^(entendi|got it)$", re.IGNORECASE),
+)
+
 app = FastAPI()
 
 
@@ -81,6 +100,52 @@ def dispensar_aviso_de_identidade(page, tentativas: int = 4) -> None:
         page.wait_for_timeout(2000)
 
 
+def dispensar_aviso_de_avaliacao(page, tentativas: int = 3) -> None:
+    """Fecha a janela "Suas avaliacoes gratuitas do Microsoft Fabric e do Power BI terminam em N dias".
+
+    E so um aviso, mas fica por cima do relatorio e o guarda de janelas de capture() recusaria o
+    print. Cada clique fica dentro da propria janela, para nao fechar um painel do relatorio que
+    tenha o mesmo nome, e so em botoes que fecham (BOTOES_QUE_FECHAM). Sem botao assim, tenta
+    Escape. Se a janela nao sair, quem chama recusa o print.
+    """
+    dispensou = False
+    for _ in range(tentativas):
+        janela = page.locator(SELETOR_JANELAS).filter(has_text=PADRAO_AVISO_DE_AVALIACAO)
+        if janela.count() == 0:
+            break
+        fechou = False
+        for padrao in BOTOES_QUE_FECHAM:
+            botao = janela.first.get_by_role("button", name=padrao)
+            if botao.count() == 0:
+                continue
+            try:
+                botao.first.click(timeout=2000)
+                fechou = True
+                break
+            except Exception:  # nao deu para clicar (coberto por outra janela?): tenta o proximo
+                continue
+        if not fechou:
+            page.keyboard.press("Escape")
+        dispensou = True
+        # Da tempo de a janela sair e de outro aviso, se houver, aparecer.
+        page.wait_for_timeout(1500)
+    if dispensou:
+        # E de os visuais se refazerem depois que a janela sai.
+        page.wait_for_timeout(2000)
+
+
+def botoes_da_janela(page) -> str:
+    """Nomes dos botoes da primeira janela aberta, para o erro dizer o que dava para fechar."""
+    try:
+        nomes = page.locator(SELETOR_JANELAS).first.locator('button, [role="button"]').evaluate_all(
+            "els => els.map(e => e.getAttribute('aria-label') || e.innerText || e.title || '')"
+        )
+    except Exception:  # so diagnostico: nao pode esconder o erro que ja vai ser devolvido
+        return ""
+    nomes = [" ".join(n.split()) for n in nomes if n and n.strip()]
+    return f" | botoes: {', '.join(nomes)}" if nomes else ""
+
+
 @app.post("/capture")
 def capture(req: CaptureRequest, x_api_key: str = Header(default="")):
     if x_api_key != API_KEY:
@@ -111,21 +176,25 @@ def capture(req: CaptureRequest, x_api_key: str = Header(default="")):
                     status_code=401,
                     detail="sessao do Power BI expirada -- rode login_once.py de novo e substitua o storage_state.json",
                 )
-            # O aviso de reautenticacao e dispensado com Cancelar. Se ele sobrar, ou se houver
-            # qualquer outra janela por cima do relatorio, melhor falhar e avisar do que mandar
-            # para a diretoria um print com o aviso.
-            dispensar_aviso_de_identidade(page)
+            # Os avisos de reautenticacao (com Cancelar) e de fim de avaliacao gratuita (com Fechar
+            # ou Escape) sao dispensados. Um pode vir depois do outro, entao duas rodadas. Se algum
+            # sobrar, ou se houver qualquer outra janela por cima do relatorio, melhor falhar e
+            # avisar do que mandar para a diretoria um print com a janela.
+            for _ in range(2):
+                dispensar_aviso_de_identidade(page)
+                dispensar_aviso_de_avaliacao(page)
             if PADRAO_REAUTENTICACAO.search(page.inner_text("body")):
                 raise HTTPException(
                     status_code=401,
                     detail="sessao do Power BI pede nova verificacao de identidade e o aviso nao saiu com Cancelar -- rode login_once.py de novo e substitua o storage_state.json",
                 )
-            dialogos = page.locator(
-                '[role="dialog"]:visible, [role="alertdialog"]:visible, [aria-modal="true"]:visible'
-            ).all_inner_texts()
+            dialogos = page.locator(SELETOR_JANELAS).all_inner_texts()
             if dialogos:
                 resumo = " ".join(dialogos[0].split())[:200]
-                raise HTTPException(status_code=409, detail=f"janela aberta sobre o relatorio: {resumo}")
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"janela aberta sobre o relatorio: {resumo}{botoes_da_janela(page)}",
+                )
             png_bytes = page.screenshot(full_page=False)
         finally:
             browser.close()
